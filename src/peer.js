@@ -19,13 +19,15 @@ export class Peer extends EventEmitter {
     simulation,
     content,
     capabilities = [],
+    iceUdpMuxPort = 0,
+    stateLifeMs = 0, stateBufferLimit = 65536,
     portable = process.env.BFE_PORTABLE_RTC === "1" || iceServers.some(
       (s) => s.relayType === "TurnTcp" || s.relayType === "TurnTls",
     ),
   }) {
     super();
-    this.keys = keys;
-    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1'].includes(value));
+    this.keys = keys;this.stateBufferLimit=stateBufferLimit;
+    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1','snapshot-relative-v1'].includes(value));
     this.initiator = initiator;
     this.expectedKey = expectedKey;
     this.compatibility = { protocol, simulation, content };
@@ -41,6 +43,7 @@ export class Peer extends EventEmitter {
     const Connection = portable ? PortablePeerConnection : require("node-datachannel").PeerConnection;
     this.pc = new Connection(name, {
       iceServers,
+      ...(iceUdpMuxPort && !portable ? {enableIceUdpMux:true,portRangeBegin:iceUdpMuxPort,portRangeEnd:iceUdpMuxPort}:{}),
       ipFamily,
       iceTransportPolicy: relay ? "relay" : "all",
       mtu: 1200,
@@ -77,7 +80,7 @@ export class Peer extends EventEmitter {
           this.channel(
             this.pc.createDataChannel(
               label,
-              label === "state" ? { unordered: true, maxRetransmits: 0 } : {},
+              label === "state" ? { unordered: true, ...(stateLifeMs?{maxPacketLifeTime:stateLifeMs}:{maxRetransmits:0}) } : {},
             ),
           );
       });
@@ -235,14 +238,14 @@ export class Peer extends EventEmitter {
       label === "state" ? { ...value, sequence: ++this.sequence } : value,
     );
     if (Buffer.byteLength(data) > 32768) throw Error("message too large");
-    if (ch.bufferedAmount() > 65536) {
+    if (ch.bufferedAmount() > (label==='state'?this.stateBufferLimit:65536)) {
       return false;
     }
     return ch.sendMessage(data);
   }
   sendBinary(value,label='bulk') {
     if(!['bulk','state'].includes(label))throw Error('Invalid binary channel');
-    const ch=this.channels.get(label);if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>65536)return false;
+    const ch=this.channels.get(label);if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>(label==='state'?this.stateBufferLimit:65536))return false;
     if(value.byteLength>32768)throw Error('binary message too large');return ch.sendMessageBinary(Buffer.from(value));
   }
   path() {

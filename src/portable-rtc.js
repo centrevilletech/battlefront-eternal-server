@@ -98,6 +98,7 @@ export class PortablePeerConnection {
   createDataChannel(label, config = {}) {
     const ch = this.pc.createDataChannel(label, {
       ordered: !config.unordered,
+      ...(config.maxPacketLifeTime!==undefined?{maxPacketLifeTime:config.maxPacketLifeTime}:{}),
       ...(config.maxRetransmits !== undefined
         ? { maxRetransmits: config.maxRetransmits }
         : {}),

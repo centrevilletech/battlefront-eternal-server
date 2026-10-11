@@ -17,7 +17,8 @@ function compress(world, buffer, sharedId) {
 // Application protocol above authenticated WebRTC. Reliable packets preserve the
 // existing engine delta chain; inputs use the unordered state channel.
 export class GameSession {
-  constructor(peer, world, id, welcome) {
+  constructor(peer, world, id, welcome, options={}) {
+    this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??20000));
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;this.binary=Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('binary-bulk-v1')&&typeof peer.sendBinary==='function';
     this.journal=peer.remote?.capabilities?.includes('snapshot-journal-v1')&&typeof peer.sendBinary==='function';
     this.listener = (m) => {
@@ -41,7 +42,7 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, journal:this.journal, linearProjectiles:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, journal:this.journal,relativeSnapshots:peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
     if(this.closed)return;
@@ -95,8 +96,8 @@ export class GameSession {
     try {
       const compressed=await compress(this.world,m.buffer,m.sharedId);
       if(this.closed||version!==this.snapshotVersion)return;
-      const data=compressed.buffer,id=++this.serial,total=Math.ceil(data.length/20000);
-      for(let index=0;index<total;index++)if(!this.peer.sendBinary(encodeBulkFrame({magic:JOURNAL_MAGIC,id:id>>>0,index,total,data:data.subarray(index*20000,(index+1)*20000),...(index===0?{metadata:m.metadata}:{})}),'state'))break;
+      const data=compressed.buffer,id=++this.serial,size=Math.max(256,Math.ceil(data.length/128),this.journalFrameBytes-Buffer.byteLength(JSON.stringify(m.metadata??{}))-16),total=Math.ceil(data.length/size);
+      for(let index=0;index<total;index++)if(!this.peer.sendBinary(encodeBulkFrame({magic:JOURNAL_MAGIC,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}),'state'))break;
     }catch{this.peer.close('snapshot-compression-error');}
   }
   packet(buffer, metadata, sharedId, magic) {

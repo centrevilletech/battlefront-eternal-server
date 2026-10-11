@@ -45,7 +45,7 @@ try {
         journal??=new Journal();
         if(lastJournalId!==group.sharedId) {
           const events=journal.push(group.buffer);lastJournalId=group.sharedId;
-          for(let offset=0;offset<events.calls.length;offset+=256){const batch={...events,id:++eventSerial,calls:events.calls.slice(offset,offset+256)};parentPort.postMessage({type:'journalEvents',sharedId:`events:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...batch})).buffer,recipients:journalRecipients});}
+          for(let offset=0;offset<events.calls.length;offset+=256){const batch={...events,id:++eventSerial,calls:events.calls.slice(offset,offset+256)};parentPort.postMessage({type:'journalEvents',sharedId:`events:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...batch})).buffer,recipients:journalRecipients.filter(r=>clients.get(r.client).snapshotAck?.epoch===journal.epoch)});}
         }
         const encoded=new Map();
         for(const recipient of journalRecipients) {
@@ -55,9 +55,9 @@ try {
           const reliable=baseTick===null,now=performance.now();
           if(reliable&&state.bootstrapEpoch===journal.epoch&&now-(state.bootstrapAt??0)<1000)continue;
           const checkpoint=reliable||journal.current.tick%15===0;
-          const key=`journal:${journal.epoch}:${journal.current.tick}:${baseTick}:${checkpoint}`;
+          const key=`journal:${journal.epoch}:${journal.current.tick}:${baseTick}:${checkpoint}:${state.relativeSnapshots}`;
           let batch=encoded.get(key);
-          if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick,checkpoint}),reliable,recipients:[]});
+          if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick,checkpoint,relativeVectors:state.relativeSnapshots}),reliable,recipients:[]});
           batch.recipients.push(recipient);
           if(checkpoint){state.checkpoints.set(journal.current.tick,journal.epoch);while(state.checkpoints.size>16)state.checkpoints.delete(state.checkpoints.keys().next().value);}
           if(reliable){state.bootstrapAt=now;state.bootstrapEpoch=journal.epoch;}
@@ -86,7 +86,7 @@ try {
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,checkpoints:new Map() });
+        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,relativeSnapshots:m.relativeSnapshots===true,checkpoints:new Map() });
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:'journal-v1'}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
       else if(m.type==='snapshotAck') {const state=clients.get(m.client);if(state?.journal&&state.checkpoints.get(m.tick)===m.epoch&&(!state.snapshotAck||m.epoch>state.snapshotAck.epoch||m.epoch===state.snapshotAck.epoch&&m.tick>state.snapshotAck.tick))state.snapshotAck={epoch:m.epoch,tick:m.tick};}

@@ -92,3 +92,14 @@ test('journal uses unordered state, reliable compressed events and identity-boun
  peer.emit('message','events',{type:'snapshot-resync'});assert.equal(world.sent.at(-1).type,'snapshotResync');
  }finally{session.close();}
 });
+
+test('replaceable snapshots discard superseded compression and bound application fragment size',async()=>{
+ const peer=new EventEmitter();peer.remote={capabilities:['snapshot-journal-v1']};peer.sent=[];peer.send=()=>true;peer.sendBinary=(buffer,lane)=>{peer.sent.push({buffer,lane});return true;};peer.close=()=>peer.emit('closed');
+ const world=new EventEmitter();world.postMessage=()=>{};const session=new GameSession(peer,world,'player',{}, {journalFrameBytes:1000});
+ try{
+  const fresh=randomBytes(5000);
+  await Promise.all([session.unorderedSnapshot({buffer:randomBytes(100000),sharedId:1}),session.unorderedSnapshot({buffer:fresh,sharedId:2,metadata:{playerId:82}})]);
+  assert(peer.sent.length>1);assert(peer.sent.every(v=>v.lane==='state'&&v.buffer.length<=1000));
+  const frames=peer.sent.map(v=>decodeBulkFrame(v.buffer));assert(frames.every(f=>f.id===frames[0].id));assert.deepEqual(inflateSync(Buffer.concat(frames.map(f=>f.data))),fresh);
+ }finally{session.close();}
+});
