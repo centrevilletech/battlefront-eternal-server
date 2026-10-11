@@ -1,3 +1,4 @@
+import { updateRoomCapabilities } from './room-capabilities.js';
 import { Session } from 'node:inspector';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -20,6 +21,7 @@ try {
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
+  const updateLinear=()=>updateRoomCapabilities(world,clients);
   const measurements = {sim:[],encode:[],total:[],droppedTicks:0,fireAccepted:0,fireRejected:0};
   const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
   const publish = () => {
@@ -49,13 +51,13 @@ try {
   parentPort.on('message', async m => {
     try {
       if(m.type==='resetMetrics'){for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;}
-      else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',...measurements,tick:game.worldClock.tick,humans:world.players.size,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
+      else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true });
+        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true });
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
-      } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); }
+      } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
       else if(m.type==='actions'){if(clients.get(m.client)?.started)world.actions?.(m.client,m.envelope);}
       else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
       else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
@@ -75,8 +77,8 @@ try {
         const player = world.player(m.client);
         let result = { epoch: 1, tick: game.worldClock.tick };
         if (m.method === 'init') result = { ...result, type: 'ready', generation: player.generation, playerId: player.unitId, shared: false };
-        else if (m.method === 'start') { clients.get(m.client).started = true; clients.get(m.client) && (clients.get(m.client).keyframe = true); result.type = 'started'; }
-        else if (m.method === 'suspend') { clients.get(m.client).started = false; world.clearInput?.(m.client); result.type = 'suspended'; }
+        else if (m.method === 'start') { const state=clients.get(m.client);if(!state.started)state.keyframe=true;state.started=true;updateLinear();result.type='started'; }
+        else if (m.method === 'suspend') { clients.get(m.client).started = false; world.clearInput?.(m.client); updateLinear(); result.type = 'suspended'; }
         else if (m.method === 'resync') { clients.get(m.client) && (clients.get(m.client).keyframe = true); }
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
         else if (m.method === 'inspect') result = { ...result, type: 'inspection', player, players: clients.size, running: Boolean(timer) };

@@ -38,7 +38,7 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, linearProjectiles:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
     if(this.closed)return;
