@@ -15,7 +15,7 @@ Retail data is never downloaded or included in this repository or its image.
 LAN hosting works without accepting the online notice or contacting a master.
 UDP discovery uses port 18452, HTTP `/info` and WebSocket `/signal` use port 18451,
 and the diagnostic `/healthz` listener stays on loopback port 18450. The local
-signaling listener binds `0.0.0.0`; set `bind` and `gamePort` in config.json to
+signaling listener binds `::` with IPv4 dual-stack support; set `bind` and `gamePort` in config.json to
 change it. Clients verify Ed25519 identities bound to both DTLS fingerprints.
 
 Accepting the online notice enables directory registration, 20-second

@@ -2,6 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { Worker } from "node:worker_threads";
@@ -35,7 +36,7 @@ async function menu() {
   try {
     for (;;) {
       console.log(
-        "\nBattlefront Eternal server\n1  Server name\n2  Installed engine and imported game data\n3  Playlist\n4  Online notice and master\n5  Relay policy\n6  Global ban preference\n7  Show configuration\n0  Save and exit",
+        "\nBattlefront Eternal server\n1  Server name\n2  Installed engine and imported game data\n3  Playlist\n4  Online notice and master\n5  Relay policy\n6  Global ban preference\n7  Show configuration\n8  Import owned gameplay bundle\n0  Save and exit",
       );
       const choice = await io.question("Choice: ");
       if (choice === "0") {
@@ -83,6 +84,17 @@ async function menu() {
         config.honorGlobalBans =
           (await io.question("Honor global bans? yes/no: ")) === "yes";
       else if (choice === "7") console.log(JSON.stringify(config, null, 2));
+      else if (choice === "8") {
+        if (!config.engine) { console.log('Set the installed engine directory first.'); continue; }
+        const bundle = await io.question('Owned gameplay bundle directory: ');
+        const destination = await io.question('New imported data directory: ');
+        if (!bundle.trim() || !destination.trim()) { console.log('Both paths are required.'); continue; }
+        try {
+          const { importBundle } = await import(pathToFileURL(join(config.engine, 'src/runtime/gameplay-bundle-node.js')));
+          const result = await importBundle({ bundle:resolve(bundle), destination:resolve(destination) });
+          config.data = result.destination; console.log('Gameplay bundle verified and imported.');
+        } catch(e) { console.error('Import failed:', e.message); }
+      }
       save();
     }
   } finally {

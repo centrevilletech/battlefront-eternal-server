@@ -20,3 +20,8 @@ test('LAN discovery rejects unsolicited replies with the wrong nonce', async () 
   try { assert.deepEqual(await discoverLan({ port: socket.address().port, targets: ['127.0.0.1'], timeout: 100 }), []); }
   finally { socket.close(); }
 });
+
+test('IPv6 LAN discovery uses observed IPv6 source address', async t => {
+  let server;try{server=await startLanDiscovery({port:0,host:'::1',getInfo:()=>({id:'b'.repeat(64),name:'IPv6 host',port:18451})});}catch(error){if(['EAFNOSUPPORT','EADDRNOTAVAIL'].includes(error.code))return t.skip('IPv6 unavailable');throw error;}
+  try{const found=await discoverLan({port:server.port,targets:['::1'],timeout:100});assert.equal(found.length,1);assert.equal(found[0].address,'::1');}finally{await server.close();}
+});
