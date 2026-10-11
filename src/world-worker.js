@@ -8,6 +8,8 @@ try {
   const { createGame } = await import(pathToFileURL(resolve(root, 'src/game.js')));
   const { createMultiplayerWorld } = await import(pathToFileURL(resolve(root, 'src/runtime/multiplayer-world.js')));
   const { worldState } = await import(pathToFileURL(resolve(root, 'src/runtime/world-state.js')));
+  const { contentHash } = await import(pathToFileURL(resolve(root, 'src/runtime/content-hash.js')));
+  const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 32 });
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
@@ -20,7 +22,7 @@ try {
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
   const step = () => { const tick = world.step(); if (tick % 3 === 0) publish(); };
-  parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation });
+  parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
     try {
       if (m.type === 'join') {

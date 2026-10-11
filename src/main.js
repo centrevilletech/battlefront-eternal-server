@@ -132,6 +132,7 @@ async function serve() {
     world.on("message", async (m) => {
       if (m.type === "ready") {
         status = "running";
+        config.content = m.content;
         world.postMessage({ type: "start" });
         const keys = loadIdentity(join(directory, 'identity.json'));
         try { local = await startLocalServer({ config, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
