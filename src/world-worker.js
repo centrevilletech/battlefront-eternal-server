@@ -1,3 +1,5 @@
+import { Session } from 'node:inspector';
+import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { parentPort, workerData } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
@@ -9,11 +11,15 @@ try {
   const { createGame } = await import(pathToFileURL(resolve(root, 'src/game.js')));
   const { createMultiplayerWorld } = await import(pathToFileURL(resolve(root, 'src/runtime/multiplayer-world.js')));
   const { worldState } = await import(pathToFileURL(resolve(root, 'src/runtime/world-state.js')));
+  const { compactMetadata } = await import(pathToFileURL(resolve(root, 'src/runtime/shared-packet.js')));
   const { contentHash } = await import(pathToFileURL(resolve(root, 'src/runtime/content-hash.js')));
   const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
+  let profiler;
+  const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
+  if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
   const measurements = {sim:[],encode:[],total:[],droppedTicks:0,fireAccepted:0,fireRejected:0};
   const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
   const publish = () => {
@@ -25,7 +31,7 @@ try {
       if(packet instanceof ArrayBuffer){parentPort.postMessage({type:'packet',client,buffer:packet,keyframe},[packet]);continue;}
       let group=groups.get(packet.sharedId);
       if(!group)groups.set(packet.sharedId,group={type:'packet',sharedId:packet.sharedId,buffer:packet.buffer.slice(0),recipients:[]});
-      group.recipients.push({client,keyframe,metadata:packet.metadata});
+      group.recipients.push({client,keyframe,metadata:state.compactMetadata && typeof compactMetadata==='function' ? compactMetadata(packet.metadata) : packet.metadata});
     }
     for(const group of groups.values())parentPort.postMessage(group,[group.buffer]);
     measure('encode',performance.now()-begun);
@@ -42,11 +48,11 @@ try {
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
     try {
-      if (m.type === 'metrics') { parentPort.postMessage({type:'metrics',...measurements,tick:game.worldClock.tick,humans:world.players.size,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
+      if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',...measurements,tick:game.worldClock.tick,humans:world.players.size,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true });
-        clients.set(m.client, { started: false });
+        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true });
         parentPort.postMessage({ type: 'joined', client: m.client, player: world.player(m.client), tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); }
       else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}

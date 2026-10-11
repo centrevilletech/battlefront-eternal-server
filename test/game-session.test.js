@@ -43,3 +43,19 @@ test('fire edges use reliable events, bind authenticated identity, and cap flood
   assert(closed);assert.equal(world.sent.filter(m=>m.type==='fire').length,120);
  }finally{session.close();}
 });
+
+test('input and resync floods cannot amplify worker load',()=>{
+ const {peer,world,session}=setup();let closed=false;peer.once('closed',()=>closed=true);
+ try{
+  for(let i=0;i<20;i++)peer.emit('message','events',{type:'resync'});
+  assert.equal(world.sent.filter(m=>m.type==='resync').length,1);
+  for(let i=0;i<17;i++)peer.emit('message','state',{type:'inputs',commands:Array.from({length:32},()=>({tick:1}))});
+  assert(closed);assert.equal(world.sent.filter(m=>m.type==='inputs').length,16);
+ }finally{session.close();}
+});
+
+test('compact metadata is enabled only by the authenticated peer capability',()=>{
+ const peer=new EventEmitter();peer.send=()=>true;peer.remote={capabilities:['unknown','compact-personal-v1']};const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);
+ const session=new GameSession(peer,world,'authenticated',{});assert.equal(world.sent[0].compactMetadata,true);session.close();
+ const plain=setup();assert.equal(plain.world.sent[0].compactMetadata,false);plain.session.close();
+});

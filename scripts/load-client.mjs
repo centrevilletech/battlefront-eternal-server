@@ -14,6 +14,7 @@ process.on('message',async m=>{
  const peer=new Peer({name:'load-client-'+m.index,keys:loadIdentity(join(m.directory,'client-'+m.index)),initiator:true,simulation:'bfe-sim-2',content:m.content,portable:m.portable});
  const c={peer,index:m.index,reader:new BinaryReader(),parts:new Map(),packets:0,tick:0,ack:0,sequence:0,fireId:0,held:false,rtt:[],ackLag:[],packetGaps:[],lastPacket:0};peers.set(m.index,c);
  peer.on('signal',signal=>process.send({type:'signal',index:m.index,signal}));
+ peer.once('closed',reason=>process.send({type:'peerClosed',index:m.index,reason}));
  peer.on('ping',value=>c.rtt.push(value));
  peer.on('fault',error=>process.send({type:'error',message:String(error)}));
  const packet=(data,metadata)=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,metadata);const now=performance.now();if(c.lastPacket)c.packetGaps.push(now-c.lastPacket);c.lastPacket=now;c.tick=p.tick;c.ack=p.ack;c.generation=p.generation??c.generation;c.spawn=p.personal?.spawn;c.alive=p.alive;c.className=p.playerClass;c.packets++;if(c.sequence)c.ackLag.push(Math.max(0,c.sequence-c.ack));};

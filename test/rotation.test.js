@@ -12,6 +12,7 @@ test('finished matches replace the world and advance the configured playlist', {
   await Promise.all([mkdir(join(engine,'src/runtime'),{recursive:true}),mkdir(data),mkdir(state)]);
   await writeFile(join(engine,'package.json'),' {"type":"module"}');
   await writeFile(join(engine,'src/game.js'),`import {appendFileSync} from 'node:fs';export async function createGame({query}){appendFileSync(${JSON.stringify(log)},query+'\\n');return {playerUnit:{generation:1},worldClock:{tick:0},battle:{finished:false}}}`);
+  await writeFile(join(engine,'src/runtime/shared-packet.js'),"export function compactMetadata(value){return value}");
   await writeFile(join(engine,'src/runtime/content-hash.js'),"export async function contentHash(){return 'fixture-content'}");
   await writeFile(join(engine,'src/runtime/world-state.js'),"export function worldState(){return {}}");
   await writeFile(join(engine,'src/runtime/multiplayer-world.js'),"export function createMultiplayerWorld(game){return {step(){if(++game.worldClock.tick===12)game.battle.finished=true;return game.worldClock.tick},snapshot(){}}}");

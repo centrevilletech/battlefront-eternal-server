@@ -14,7 +14,7 @@ const arg=(name,fallback)=>Number(process.argv.find(v=>v.startsWith('--'+name+'=
 const count=arg('players',64),seconds=arg('seconds',30),loss=arg('loss',.05),jitter=arg('jitter',50),latency=arg('latency',50),portableEvery=arg('portable-every',8),retryMs=arg('retry-ms',200);
 if(![1,8,32,64].includes(count)||seconds<1||seconds>600||loss<0||loss>.5)throw Error('Invalid scenario');
 const directory=await mkdtemp(join(tmpdir(),'bfe-load-')),root=resolve(process.env.BFE_ENGINE_DIR??'../battlefront-eternal');
-const world=new Worker(new URL('../src/world-worker.js',import.meta.url),{workerData:{engine:root,data:resolve(process.env.BFE_DATA_DIR??'../battlefront-eternal/public'),maxPlayers:64,armySize:32,metrics:true}});
+const world=new Worker(new URL('../src/world-worker.js',import.meta.url),{workerData:{engine:root,data:resolve(process.env.BFE_DATA_DIR??'../battlefront-eternal/public'),maxPlayers:64,armySize:32,metrics:true,profile:process.argv.find(value=>value.startsWith('--profile='))?.slice(10)}});
 const hosts=[],sessions=[],children=[],samples=[],ages=[],arrivalAges=[],backlogs=[],timers=new Set();let failed,wire=0,raw=0,seed=42,sampler,totalRss=0,serverTick=0;
 const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
 const later=(fn,ms)=>{const t=setTimeout(()=>{timers.delete(t);fn();},ms);timers.add(t);};
@@ -27,7 +27,7 @@ try{
  const ready=await receive(world,'ready'),keys=loadIdentity(join(directory,'host'));
  for(let i=0;i<Math.ceil(count/8);i++){
  const child=fork(new URL('./load-client.mjs',import.meta.url),[],{execArgv:['--max-old-space-size=512'],stdio:['ignore','inherit','inherit','ipc']});children.push(child);
- child.on('message',m=>{if(m.type==='signal')hosts[m.index].signal(m.signal);else if(m.type==='welcome')hosts[m.index].welcomed=true;else if(m.type==='error')failed=Error(m.message);else if(m.type==='sample'){samples[i]=m;arrivalAges.push(...m.clients.map(c=>c.ageMs));ages.push(...m.clients.map(c=>Math.max(0,serverTick-c.tick)*1000/60));totalRss=Math.max(totalRss,process.memoryUsage().rss+samples.reduce((n,s)=>n+s.rss,0));if(totalRss>8*1024**3)failed=Error('8GiB memory budget exceeded');}});
+ child.on('message',m=>{if(m.type==='signal')hosts[m.index].signal(m.signal);else if(m.type==='peerClosed')console.error('Load client closed',m.index,m.reason);else if(m.type==='welcome')hosts[m.index].welcomed=true;else if(m.type==='error')failed=Error(m.message);else if(m.type==='sample'){samples[i]=m;arrivalAges.push(...m.clients.map(c=>c.ageMs));ages.push(...m.clients.map(c=>Math.max(0,serverTick-c.tick)*1000/60));totalRss=Math.max(totalRss,process.memoryUsage().rss+samples.reduce((n,s)=>n+s.rss,0));if(totalRss>8*1024**3)failed=Error('8GiB memory budget exceeded');}});
  child.on('exit',code=>{if(code)failed=Error('Client process exited '+code);});
  }
  for(let index=0;index<count;index++){

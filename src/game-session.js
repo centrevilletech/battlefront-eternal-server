@@ -37,7 +37,7 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator });
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
     if(m.type==='fire') {
@@ -59,18 +59,24 @@ export class GameSession {
     } else if (m.type === 'input' || m.type === 'inputs') {
       const commands = m.type === 'input' ? [m.command] : m.commands;
       if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
+      const now=Date.now();if(now-(this.inputWindow??0)>=1000){this.inputWindow=now;this.inputCount=0;}
+      this.inputCount+=commands.length;if(this.inputCount>512)return this.peer.close();
       this.world.postMessage({ type: 'inputs', client: this.id, commands });
     } else if (m.type === 'call' || m.type === 'rpc') {
       if (!Number.isSafeInteger(m.id) || !['init', 'start', 'suspend', 'inspect', 'resync'].includes(m.method)) {
         this.peer.send('events', { type: 'reply', id: m.id, error: 'Unsupported operation' }); return;
       }
+      const now=Date.now();if(now-(this.callWindow??0)>=1000){this.callWindow=now;this.callCount=0;}
+      if(++this.callCount>32)return this.peer.close();
+      if(m.method==='resync'&&!this.allowResync())return;
       this.world.postMessage({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });
-    } else if (m.type === 'resync') this.world.postMessage({ type: 'resync', client: this.id });
+    } else if (m.type === 'resync' && this.allowResync()) this.world.postMessage({ type: 'resync', client: this.id });
   }
+  allowResync() {const now=performance.now();if(now-(this.lastResync??-Infinity)<1000)return false;this.lastResync=now;return true;}
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
   packet(buffer, metadata, sharedId) {
     if(this.closed)return;
-    if(buffer.byteLength>2*1024*1024 || this.rawBytes+this.bytes+buffer.byteLength>4*1024*1024)return this.peer.close();
+    if(buffer.byteLength>2*1024*1024 || this.rawBytes+this.bytes+buffer.byteLength>4*1024*1024)return this.peer.close('snapshot-memory-limit');
     const promise=compress(this.world,buffer,sharedId);
     promise.catch(()=>{});
     this.pending.push({promise,metadata,bytes:buffer.byteLength,queuedAt:performance.now(),epoch:this.compressionEpoch});
@@ -85,13 +91,13 @@ export class GameSession {
         const data=await item.promise;
         if(this.closed || item.epoch!==this.compressionEpoch)continue;
         this.rawBytes-=item.bytes;
-        if(this.bytes+data.length>4*1024*1024){this.peer.close();break;}
+        if(this.bytes+data.length>4*1024*1024){this.peer.close('compressed-memory-limit');break;}
         const id=++this.serial,total=Math.ceil(data.length/20000),extra=item.metadata?{metadata:item.metadata}:{};
         if(total===1)this.enqueue({type:'ticks',encoding:'deflate',buffers:[data],...extra});
         else for(let index=0;index<total;index++)this.enqueue({type:'packet',encoding:'deflate',id,index,total,data:data.slice(index*20000,(index+1)*20000),...(index===0?extra:{})});
         this.bytes+=data.length;this.inflight=null;this.flush();
       }
-    } catch { this.peer.close(); }
+    } catch { this.peer.close('compression-or-send-error'); }
     finally {this.draining=false;this.inflight=null;}
   }
   flush() {

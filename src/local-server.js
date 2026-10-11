@@ -20,6 +20,7 @@ export async function startLocalServer({ config, identity, certificate, world, q
     if(sockets.size >= (config.maxPlayers ?? 64)*2) {socket.close();return;}
     sockets.add(socket);
     const peer=new Peer({name:'lan-client',keys:identity.keys,simulation:info().simulation,content:info().content,portable:process.env.BFE_PORTABLE_RTC==='1'||config.portableRTC===true,...certificate});
+    peer.once('closed',reason=>{if(reason && reason!=='closed')console.warn('LAN peer disconnected:',reason);});
     peers.add(peer); let count=0; const timeout=setTimeout(()=>peer.close(),30000);
     peer.on('signal',s=>{if(socket.readyState===WebSocket.OPEN&&socket.bufferedAmount<65536)socket.send(JSON.stringify(s));});
     socket.on('message',raw=>{try{if(++count>180)throw Error('signaling limit');peer.signal(JSON.parse(raw));}catch{peer.close();}});

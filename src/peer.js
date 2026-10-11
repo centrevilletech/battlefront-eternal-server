@@ -18,12 +18,14 @@ export class Peer extends EventEmitter {
     protocol = 1,
     simulation,
     content,
+    capabilities = [],
     portable = process.env.BFE_PORTABLE_RTC === "1" || iceServers.some(
       (s) => s.relayType === "TurnTcp" || s.relayType === "TurnTls",
     ),
   }) {
     super();
     this.keys = keys;
+    this.capabilities = capabilities.filter(value=>value==='compact-personal-v1');
     this.initiator = initiator;
     this.expectedKey = expectedKey;
     this.compatibility = { protocol, simulation, content };
@@ -56,16 +58,16 @@ export class Peer extends EventEmitter {
     this.pc.onDataChannel((ch) => this.channel(ch));
     this.pc.onStateChange((state) => {
       this.emit("state", state);
-      if (["failed", "closed"].includes(state)) this.close();
+      if (["failed", "closed"].includes(state)) this.close(`rtc-${state}`);
     });
     this.timer = setInterval(() => {
-      if (Date.now() - this.lastTraffic > 30000) this.close();
+      if (Date.now() - this.lastTraffic > 30000) this.close("idle-timeout");
       else if (this.authenticated)
         this.send("events", { type: "ping", time: Date.now() });
     }, 10000);
     this.timer.unref();
     this.authTimer = setTimeout(() => {
-      if (!this.authenticated) this.close();
+      if (!this.authenticated) this.close("authentication-timeout");
     }, 30000);
     this.authTimer.unref();
     // Defer channel creation so callers attach signaling callbacks first.
@@ -90,8 +92,8 @@ export class Peer extends EventEmitter {
       return;
     }
     this.channels.set(label, ch);
-    ch.onError(() => this.close());
-    ch.onClosed(() => this.close());
+    ch.onError(() => this.close(`channel-${label}-error`));
+    ch.onClosed(() => this.close(`channel-${label}-closed`));
     ch.onOpen(() => {
       if (label === "events") this.hello();
     });
@@ -137,6 +139,7 @@ export class Peer extends EventEmitter {
       JSON.stringify({
         type: "hello",
         nonce: this.nonce,
+        capabilities: this.capabilities,
         ...this.compatibility,
         publicKey: this.keys.publicKey,
       }),
@@ -200,6 +203,7 @@ export class Peer extends EventEmitter {
     } else throw Error("invalid handshake");
   }
   signal(m) {
+    if(this.closed)return;
     if (
       typeof m.sdp === "string" &&
       m.sdp.length <= 24000 &&
@@ -246,13 +250,13 @@ export class Peer extends EventEmitter {
         }
       : { kind: "checking" };
   }
-  close() {
+  close(reason = "closed") {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
     clearTimeout(this.authTimer);
     for (const ch of this.channels.values()) ch.close();
     this.pc.close();
-    this.emit("closed");
+    this.emit("closed",reason);
   }
 }
