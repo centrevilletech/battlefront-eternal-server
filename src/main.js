@@ -115,9 +115,12 @@ async function serve() {
     );
   });
   server.listen(Number(process.env.PORT ?? 18450), "127.0.0.1");
-  if (config.engine && config.data) {
-    const [map, side] = config.rotation[0].replace(/^swbf1\//, "").split(":");
-    if (config.rotation[0].startsWith("swbf2/"))
+  let rotationIndex = 0, rotating = false;
+  async function launch() {
+    error = null; tick = 0;
+    const mission = config.rotation[rotationIndex];
+    const [map, side] = mission.replace(/^swbf1\//, "").split(":");
+    if (mission.startsWith("swbf2/"))
       throw Error("BF2 simulation is not implemented");
     const query = `?map=${map}&side=${side}&ai=classic&seed=1`;
     world = new Worker(new URL("./world-worker.js", import.meta.url), {
@@ -144,6 +147,17 @@ async function serve() {
             await online.start(); console.log('Online server identity:', online.id);
           } catch (e) { error = e.message; console.error('Online registration:', e.message); }
         }
+      } else if (m.type === "finished" && !rotating) {
+        rotating = true;
+        rotationIndex = (rotationIndex + 1) % config.rotation.length;
+        const [nextMap,nextSide] = config.rotation[rotationIndex].replace(/^swbf1\//,'').split(':');
+        const match = { query:`?map=${nextMap}&side=${nextSide}&ai=classic&seed=1`, delayMs:8000 };
+        online?.match(match); local?.match(match);
+        setTimeout(async () => {
+          try { await online?.close(); await local?.close(); await world.terminate(); online=null; local=null; await launch(); }
+          catch(e) { status='fault'; error=e.message; console.error(e); }
+          finally { rotating=false; }
+        }, 500);
       } else if (m.type === "tick") tick = m.tick;
       else if (m.type === "error") {
         status = "fault";
@@ -156,6 +170,7 @@ async function serve() {
       error = e.message;
     });
   }
+  if (config.engine && config.data) await launch();
   console.log("bfeserver service started; control menu: bfeserver");
   for (const s of ["SIGINT", "SIGTERM"])
     process.on(s, async () => {

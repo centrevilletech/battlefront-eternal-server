@@ -32,5 +32,5 @@ export async function startLocalServer({ config, identity, certificate, world, q
   let discovery;
   try { if(config.discovery !== false) discovery=await startLanDiscovery({port:config.discoveryPort ?? 18452,getInfo:info}); }
   catch(error) { console.error('LAN discovery unavailable:',error.message); }
-  return { info, async close(){await discovery?.close();for(const p of peers)p.close();for(const s of sockets)s.terminate();websocket.close();await new Promise(r=>server.close(r));} };
+  return { info, match(value){for(const peer of peers)peer.send('events',{type:'match',...value});}, async close(){await discovery?.close();for(const p of peers)p.close();for(const s of sockets)s.terminate();websocket.close();await new Promise(r=>server.close(r));} };
 }

@@ -8,6 +8,7 @@ export class GameSession {
       if (m.client !== id) return;
       if (m.type === 'packet') this.packet(m.buffer);
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
+      else if (m.type === 'chat') peer.send('events', m);
       else if (m.type === 'reply') { peer.send('events', m); if(m.error && m.id === undefined)peer.close(); }
     };
     world.on('message', this.listener);
@@ -17,7 +18,15 @@ export class GameSession {
     world.postMessage({ type: 'join', client: id, spectator: peer.spectator });
   }
   message(label, m) {
-    if (m.type === 'input' || m.type === 'inputs') {
+    if (m.type === 'chat') {
+      if (label !== 'events' || typeof m.text !== 'string' || m.text.length > 240) return;
+      const now = Date.now();
+      this.chatTimes = (this.chatTimes ?? []).filter(time => now-time < 5000);
+      if (this.chatTimes.length >= 4) return;
+      const text = m.text.replace(/[\x00-\x1f\x7f]/g, '').trim();
+      if (!text) return;
+      this.chatTimes.push(now); this.world.postMessage({ type:'chat', client:this.id, text, team:m.team === true });
+    } else if (m.type === 'input' || m.type === 'inputs') {
       const commands = m.type === 'input' ? [m.command] : m.commands;
       if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
       this.world.postMessage({ type: 'inputs', client: this.id, commands });

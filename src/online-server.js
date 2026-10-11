@@ -67,6 +67,7 @@ export class OnlineServer extends EventEmitter {
       this.pending.delete(m.from);
     } else peer.signal(signal);
   }
+  match(value) { for (const peer of this.peers.values()) peer.send('events', { type:'match', ...value }); }
   async close() {
     this.closed = true; clearInterval(this.heartbeat); clearInterval(this.banTimer); clearTimeout(this.retry);
     for (const peer of this.peers.values()) peer.close(); this.master.close();

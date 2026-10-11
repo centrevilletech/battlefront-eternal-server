@@ -43,7 +43,10 @@ and imported data read-only and persist `/data`. A Linux Docker host should use
 host networking for LAN discovery and ICE. No GPU, Electron, DOM or WebGL is
 required by the server.
 
-Remaining release gates include match rotation, complete operator kick/ban/stats
+Finished matches advance the configured playlist and reload connected clients
+into a new authoritative world. The same persistent server identity is retained.
+
+Remaining release gates include complete operator kick/ban/stats
 controls, Steam acquisition, signed installers/updates, vehicle and late-join
 qualification, and full-match testing under latency, packet loss and cellular
 networks. Do not treat workstation relay tests as Starlink or load qualification.
