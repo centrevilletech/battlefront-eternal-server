@@ -10,10 +10,11 @@ test(
     try {
       await new Promise((resolve, reject) => {
         let received = 0;
-        a.onLocalDescription((s, t) => b.setRemoteDescription(s, t));
-        b.onLocalDescription((s, t) => a.setRemoteDescription(s, t));
-        a.onLocalCandidate((c, m) => b.addRemoteCandidate(c, m));
-        b.onLocalCandidate((c, m) => a.addRemoteCandidate(c, m));
+        const aq=[],bq=[];let ar=false,br=false;
+        a.onLocalDescription((s,t)=>{b.setRemoteDescription(s,t);br=true;for(const [c,m]of bq.splice(0))b.addRemoteCandidate(c,m);});
+        b.onLocalDescription((s,t)=>{a.setRemoteDescription(s,t);ar=true;for(const [c,m]of aq.splice(0))a.addRemoteCandidate(c,m);});
+        a.onLocalCandidate((c,m)=>br?b.addRemoteCandidate(c,m):bq.push([c,m]));
+        b.onLocalCandidate((c,m)=>ar?a.addRemoteCandidate(c,m):aq.push([c,m]));
         b.onDataChannel((ch) => {
           ch.onMessage((msg) => {
             assert.ok(["state", "events", "bulk"].includes(String(msg)));

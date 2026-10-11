@@ -6,6 +6,10 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { Worker } from "node:worker_threads";
 import http from "node:http";
+import { startLocalServer } from "./local-server.js";
+import { loadIdentity, keyId } from "./identity.js";
+import { loadCertificate } from "./certificate.js";
+import { OnlineServer } from "./online-server.js";
 const directory = resolve(
   process.env.BFE_STATE_DIR ?? join(homedir(), ".local/share/bfeserver"),
 );
@@ -67,6 +71,9 @@ async function menu() {
         );
         config.onlineNoticeAccepted =
           (await io.question("Accept online processing? Type yes: ")) === "yes";
+        const keys = loadIdentity(join(directory, 'identity.json'));
+        try { local = await startLocalServer({ config, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
+        catch(e) { error=e.message; console.error('LAN listener:',e.message); }
         if (config.onlineNoticeAccepted) {
           const u = new URL(await io.question("Master URL: "));
           if (u.protocol !== "https:") throw Error("HTTPS required");
@@ -86,6 +93,7 @@ async function menu() {
   }
 }
 async function serve() {
+  let online = null, local = null;
   let world = null,
     status = "setup",
     tick = 0,
@@ -105,7 +113,7 @@ async function serve() {
         status,
         tick,
         error,
-        multiplayerReady: false,
+        multiplayerReady: status === "running" && Boolean(local),
       }),
     );
   });
@@ -114,18 +122,30 @@ async function serve() {
     const [map, side] = config.rotation[0].replace(/^swbf1\//, "").split(":");
     if (config.rotation[0].startsWith("swbf2/"))
       throw Error("BF2 simulation is not implemented");
+    const query = `?map=${map}&side=${side}&ai=classic&seed=1`;
     world = new Worker(new URL("./world-worker.js", import.meta.url), {
       workerData: {
         engine: config.engine,
         data: config.data,
-        query: `?map=${map}&side=${side}&ai=classic&seed=1`,
+        query,
+        maxPlayers: config.maxPlayers ?? 32,
       },
     });
     status = "loading";
-    world.on("message", (m) => {
+    world.on("message", async (m) => {
       if (m.type === "ready") {
         status = "running";
         world.postMessage({ type: "start" });
+        const keys = loadIdentity(join(directory, 'identity.json'));
+        try { local = await startLocalServer({ config, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
+        catch(e) { error=e.message; console.error('LAN listener:',e.message); }
+        if (config.onlineNoticeAccepted) {
+          try {
+            online = new OnlineServer({ config, directory, world, query });
+            online.on('fault', message => console.error('Online:', message));
+            await online.start(); console.log('Online server identity:', online.id);
+          } catch (e) { error = e.message; console.error('Online registration:', e.message); }
+        }
       } else if (m.type === "tick") tick = m.tick;
       else if (m.type === "error") {
         status = "fault";
@@ -140,7 +160,9 @@ async function serve() {
   }
   console.log("bfeserver service started; control menu: bfeserver");
   for (const s of ["SIGINT", "SIGTERM"])
-    process.on(s, () => {
+    process.on(s, async () => {
+      await online?.close();
+      await local?.close();
       world?.terminate();
       server.close(() => process.exit(0));
     });

@@ -1,0 +1,51 @@
+// Application protocol above authenticated WebRTC. Reliable packets preserve the
+// existing engine delta chain; inputs use the unordered state channel.
+export class GameSession {
+  constructor(peer, world, id, welcome) {
+    this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false;
+    this.listener = (m) => {
+      if (m.client !== id) return;
+      if (m.type === 'packet') this.packet(m.buffer);
+      else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
+      else if (m.type === 'reply') peer.send('events', m);
+    };
+    world.on('message', this.listener);
+    peer.on('message', (label, m) => this.message(label, m));
+    peer.once('closed', () => this.close());
+    this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator });
+  }
+  message(label, m) {
+    if (m.type === 'input' || m.type === 'inputs') {
+      const commands = m.type === 'input' ? [m.command] : m.commands;
+      if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
+      this.world.postMessage({ type: 'inputs', client: this.id, commands });
+    } else if (m.type === 'call' || m.type === 'rpc') {
+      if (!Number.isSafeInteger(m.id) || !['init', 'start', 'suspend', 'inspect', 'worldState', 'resync'].includes(m.method)) {
+        this.peer.send('events', { type: 'reply', id: m.id, error: 'Unsupported operation' }); return;
+      }
+      this.world.postMessage({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });
+    } else if (m.type === 'resync') this.world.postMessage({ type: 'resync', client: this.id });
+  }
+  packet(buffer) {
+    const data = Buffer.from(buffer).toString('base64');
+    if (data.length > 2 * 1024 * 1024 || this.bytes + data.length > 4 * 1024 * 1024) return this.peer.close();
+    const id = ++this.serial, total = Math.ceil(data.length / 20000);
+    if (total === 1) this.queue.push({ type: 'ticks', buffers: [data] });
+    else for (let index = 0; index < total; index++) this.queue.push({ type: 'packet', id, index, total, data: data.slice(index * 20000, (index + 1) * 20000) });
+    this.bytes += data.length;
+    this.flush();
+  }
+  flush() {
+    let count = 0;
+    while (this.queue.length && count++ < 4) {
+      const message = this.queue[0];
+      if (!this.peer.send('bulk', message)) break;
+      this.queue.shift(); this.bytes -= message.data?.length ?? message.buffers[0].length;
+    }
+  }
+  close() {
+    clearInterval(this.timer); this.world.off('message', this.listener);
+    this.world.postMessage({ type: 'leave', client: this.id }); this.queue.length = 0;
+  }
+}

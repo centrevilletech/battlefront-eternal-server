@@ -27,6 +27,8 @@ export class Peer extends EventEmitter {
     this.expectedKey = expectedKey;
     this.compatibility = { protocol, simulation, content };
     this.channels = new Map();
+    this.pendingCandidates = [];
+    this.hasRemoteDescription = false;
     this.authenticated = false;
     this.closed = false;
     this.sequence = 0;
@@ -202,14 +204,22 @@ export class Peer extends EventEmitter {
       m.sdp.length <= 24000 &&
       ["offer", "answer"].includes(m.type)
     )
-      this.pc.setRemoteDescription(m.sdp, m.type);
+      {
+        this.pc.setRemoteDescription(m.sdp, m.type);
+        this.hasRemoteDescription = true;
+        for (const c of this.pendingCandidates.splice(0)) this.pc.addRemoteCandidate(c.candidate, c.mid);
+      }
     else if (
       typeof m.candidate === "string" &&
       m.candidate.length < 2048 &&
       typeof m.mid === "string" &&
       m.mid.length < 32
     )
-      this.pc.addRemoteCandidate(m.candidate, m.mid);
+      {
+        if (this.hasRemoteDescription) this.pc.addRemoteCandidate(m.candidate, m.mid);
+        else if (this.pendingCandidates.length < 32) this.pendingCandidates.push(m);
+        else throw Error("too many queued candidates");
+      }
     else throw Error("invalid signaling");
   }
   send(label, value) {
@@ -220,7 +230,6 @@ export class Peer extends EventEmitter {
     );
     if (Buffer.byteLength(data) > 32768) throw Error("message too large");
     if (ch.bufferedAmount() > 65536) {
-      if (label !== "state") this.close();
       return false;
     }
     return ch.sendMessage(data);
