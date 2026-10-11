@@ -136,13 +136,14 @@ async function serve() {
       if (m.type === "ready") {
         status = "running";
         config.content = m.content;
+        const activeConfig = { ...config, rotation:[...config.rotation.slice(rotationIndex), ...config.rotation.slice(0,rotationIndex)] };
         world.postMessage({ type: "start" });
         const keys = loadIdentity(join(directory, 'identity.json'));
-        try { local = await startLocalServer({ config, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
+        try { local = await startLocalServer({ config:activeConfig, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
         catch(e) { error=e.message; console.error('LAN listener:',e.message); }
         if (config.onlineNoticeAccepted) {
           try {
-            online = new OnlineServer({ config, directory, world, query });
+            online = new OnlineServer({ config:activeConfig, directory, world, query });
             online.on('fault', message => console.error('Online:', message));
             await online.start(); console.log('Online server identity:', online.id);
           } catch (e) { error = e.message; console.error('Online registration:', e.message); }
