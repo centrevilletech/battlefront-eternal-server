@@ -1,4 +1,5 @@
-import rtc from "node-datachannel";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 import { PortablePeerConnection } from "./portable-rtc.js";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -17,7 +18,7 @@ export class Peer extends EventEmitter {
     protocol = 1,
     simulation,
     content,
-    portable = iceServers.some(
+    portable = process.env.BFE_PORTABLE_RTC === "1" || iceServers.some(
       (s) => s.relayType === "TurnTcp" || s.relayType === "TurnTls",
     ),
   }) {
@@ -35,7 +36,7 @@ export class Peer extends EventEmitter {
     this.lastSequence = 0;
     this.nonce = randomBytes(32).toString("hex");
     this.lastTraffic = Date.now();
-    const Connection = portable ? PortablePeerConnection : rtc.PeerConnection;
+    const Connection = portable ? PortablePeerConnection : require("node-datachannel").PeerConnection;
     this.pc = new Connection(name, {
       iceServers,
       ipFamily,

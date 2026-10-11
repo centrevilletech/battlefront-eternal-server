@@ -24,7 +24,7 @@ try {
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
   const matchId = randomUUID();
-  const report = () => parentPort.postMessage({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
+  const report = () => parentPort.postMessage({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].filter(p=>!p.spectator).map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
   let ended = false;
   const step = () => {
     const tick = world.step(); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
