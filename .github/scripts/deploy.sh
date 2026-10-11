@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${PORTAINER_URL:?}" "${PORTAINER_API_KEY:?}" "${PORTAINER_ENDPOINT_ID:?}" "${APP_IMAGE:?}"
+# The private engine deployer holds this same host-backed lock while updating
+# the stack mount, so neither workflow can overwrite the other's newer state.
+exec 9>/deployment/releases/.deploy.lock
+flock -w 600 9
 STACK_NAME=battlefront-eternal-server-production
 case "$APP_IMAGE" in ghcr.io/joshualambert/battlefront-eternal-server:sha-*) ;; *) echo 'Unexpected image repository' >&2; exit 1;; esac
 api() { curl --fail-with-body --silent --show-error --max-time 300 -H "X-API-Key: $PORTAINER_API_KEY" "$@"; }
