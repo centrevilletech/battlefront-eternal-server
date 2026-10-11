@@ -35,3 +35,16 @@ ws, MIT. Dependencies retain their licenses. Native GameNetworkingSockets was
 reviewed as a candidate; it has no equally direct maintained Node binding and
 turnkey deployment path here. WebRTC passed the local encrypted-transport test;
 its complete cross-platform and adverse-network qualification remains open.
+
+Deployment validation (2026-10-11): the public master passed signed registration,
+WSS rendezvous and channel-bound identity proofs. The relay passed authenticated
+roundtrip traffic over UDP 3478, TCP 3478 and TLS 5349. Additional tests forced
+IPv6 TURN sockets at both ends and IPv4/IPv6 socket combinations in both
+directions; these crossed through IPv4 relay allocations. This is a protocol
+connectivity check on this workstation, not proof of performance on Starlink,
+cellular access, NAT64-only networks or under a full match load.
+
+The distributed node-datachannel binary uses libjuice and did not complete
+TURN/TCP. `portable-rtc.js` adapts werift 0.25.0 (MIT) for TCP/TLS and explicit
+address-family testing while retaining the same signed peer handshake. Native
+UDP and portable WebRTC remain subject to throughput and adverse-network tests.

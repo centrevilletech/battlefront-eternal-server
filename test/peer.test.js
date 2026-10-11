@@ -1,2 +1,50 @@
-import{test}from'node:test';import assert from'node:assert/strict';import{mkdtemp,rm}from'node:fs/promises';import{tmpdir}from'node:os';import{join}from'node:path';import rtc from'node-datachannel';import{Peer}from'../src/peer.js';import{loadIdentity,keyId}from'../src/identity.js';
-test('identity proof binds encrypted session; content mismatch is spectator', {timeout:15000},async t=>{const dir=await mkdtemp(join(tmpdir(),'bfe-peer-'));const ka=loadIdentity(join(dir,'a')),kb=loadIdentity(join(dir,'b'));const a=new Peer({name:'a',keys:ka,initiator:true,expectedKey:keyId(kb.publicKey),simulation:'test',content:'one'}),b=new Peer({name:'b',keys:kb,simulation:'test',content:'two'});t.after(async()=>{a.close();b.close();rtc.cleanup();await rm(dir,{recursive:true,force:true});});a.on('signal',s=>b.signal(s));b.on('signal',s=>a.signal(s));const results=await Promise.all([new Promise(r=>a.once('ready',r)),new Promise(r=>b.once('ready',r))]);assert.equal(results[0].spectator,true);assert.equal(results[0].path.kind,'direct');const delivered=new Promise(r=>b.once('message',(_,m)=>r(m)));assert.ok(a.send('events',{type:'chat',text:'hello'}));assert.equal((await delivered).text,'hello');});
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import rtc from "node-datachannel";
+import { Peer } from "../src/peer.js";
+import { loadIdentity, keyId } from "../src/identity.js";
+test(
+  "identity proof binds encrypted session; content mismatch is spectator",
+  { timeout: 15000 },
+  async (t) => {
+    const dir = await mkdtemp(join(tmpdir(), "bfe-peer-"));
+    const ka = loadIdentity(join(dir, "a")),
+      kb = loadIdentity(join(dir, "b"));
+    const a = new Peer({
+        name: "a",
+        portable: true,
+        keys: ka,
+        initiator: true,
+        expectedKey: keyId(kb.publicKey),
+        simulation: "test",
+        content: "one",
+      }),
+      b = new Peer({
+        name: "b",
+        portable: true,
+        keys: kb,
+        simulation: "test",
+        content: "two",
+      });
+    t.after(async () => {
+      a.close();
+      b.close();
+      rtc.cleanup();
+      await rm(dir, { recursive: true, force: true });
+    });
+    a.on("signal", (s) => b.signal(s));
+    b.on("signal", (s) => a.signal(s));
+    const results = await Promise.all([
+      new Promise((r) => a.once("ready", r)),
+      new Promise((r) => b.once("ready", r)),
+    ]);
+    assert.equal(results[0].spectator, true);
+    assert.equal(results[0].path.kind, "direct");
+    const delivered = new Promise((r) => b.once("message", (_, m) => r(m)));
+    assert.ok(a.send("events", { type: "chat", text: "hello" }));
+    assert.equal((await delivered).text, "hello");
+  },
+);

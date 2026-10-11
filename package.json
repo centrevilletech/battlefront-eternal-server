@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "node-datachannel": "0.33.4",
+    "werift": "0.25.0",
     "ws": "8.22.0"
   },
   "bin": {

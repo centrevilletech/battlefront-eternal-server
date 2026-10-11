@@ -1,2 +1,19 @@
-import {test}from'node:test';import assert from'node:assert/strict';import {mkdtemp,writeFile,symlink,rm}from'node:fs/promises';import{tmpdir}from'node:os';import{join}from'node:path';import{dataReader}from'../src/content.js';
-test('local data port rejects traversal, URLs, symlink escapes',async t=>{const root=await mkdtemp(join(tmpdir(),'bfe-data-'));t.after(()=>rm(root,{recursive:true,force:true}));await writeFile(join(root,'test.json'),'{}');if(process.platform!=='win32')await symlink('/etc/passwd',join(root,'escape'));const read=await dataReader(root);assert.deepEqual(await(await read('/test.json')).json(),{});assert.equal((await read('/missing')).status,404);if(process.platform!=='win32')await assert.rejects(read('/escape'));await assert.rejects(read('https://example.com'));await assert.rejects(read('/../../etc/passwd'));});
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, writeFile, symlink, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { dataReader } from "../src/content.js";
+test("local data port rejects traversal, URLs, symlink escapes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "bfe-data-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "test.json"), "{}");
+  if (process.platform !== "win32")
+    await symlink("/etc/passwd", join(root, "escape"));
+  const read = await dataReader(root);
+  assert.deepEqual(await (await read("/test.json")).json(), {});
+  assert.equal((await read("/missing")).status, 404);
+  if (process.platform !== "win32") await assert.rejects(read("/escape"));
+  await assert.rejects(read("https://example.com"));
+  await assert.rejects(read("/../../etc/passwd"));
+});
