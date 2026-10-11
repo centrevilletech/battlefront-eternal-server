@@ -7,7 +7,7 @@ export class GameSession {
       if (m.client !== id) return;
       if (m.type === 'packet') this.packet(m.buffer);
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
-      else if (m.type === 'reply') peer.send('events', m);
+      else if (m.type === 'reply') { peer.send('events', m); if(m.error && m.id === undefined)peer.close(); }
     };
     world.on('message', this.listener);
     peer.on('message', (label, m) => this.message(label, m));

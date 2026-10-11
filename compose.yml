@@ -1,6 +1,7 @@
 services:
   server:
     build: .
+    network_mode: host
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
