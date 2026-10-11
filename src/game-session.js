@@ -30,7 +30,7 @@ export class GameSession {
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
       else if (m.type === 'fireAck') peer.send('events',m);
       else if (m.type === 'chat') peer.send('events', m);
-      else if (m.type === 'reply') { peer.send('events', m); if(m.error && m.id === undefined)peer.close(); }
+      else if (m.type === 'reply') { peer.send('events', m); if(m.error && m.id === undefined)peer.close('invalid-input'); }
     };
     world.setMaxListeners(Math.max(world.getMaxListeners(),256));
     world.on('message', this.listener);

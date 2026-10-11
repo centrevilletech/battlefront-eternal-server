@@ -28,10 +28,10 @@ try {
     assert.equal(content,listing.content,'Local gameplay content matches deployed host');
     await master.connect();
     const peer=new Peer({name:'live-'+i,keys:master.keys,initiator:true,expectedKey:serverId,simulation:listing.simulation,content,capabilities:['compact-personal-v1'],iceServers:await master.credentials(serverId),relay:true,portable:true});
-    const c={master,peer,reader:new BinaryReader(),fragments:new Map(),packets:0,sequence:0,ack:0};clients.push(c);
+    const c={master,peer,reader:new BinaryReader(),fragments:new Map(),packets:0,sequence:0,ack:0,compactFrames:0};clients.push(c);
     peer.on('signal',s=>master.signal(serverId,s));master.on('signal',m=>peer.signal(JSON.parse(m.payload)));
     peer.on('fault',message=>console.error(message));
-    const packet=(data,metadata)=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,expandMetadata(metadata));c.tick=p.tick;c.ack=p.ack;c.packets++;};
+    const packet=(data,metadata)=>{if(metadata?.compact===1)c.compactFrames++;const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,expandMetadata(metadata));c.tick=p.tick;c.ack=p.ack;c.packets++;};
     peer.on('message',(_,m)=>{
       if(m.type==='welcome')c.welcome=m;
       if(m.type==='ticks')for(const buffer of m.buffers)packet(buffer,m.metadata);
@@ -48,6 +48,6 @@ try {
     await new Promise(r=>setTimeout(r,17));
   }
   await wait(()=>clients.every(c=>c.ack>30),'input acknowledgment');
-  for(const c of clients){assert(c.tick>c.firstTick+30);assert(c.packets>10);assert.equal(c.peer.path().kind,'relay');}
-  console.log(JSON.stringify({ok:true,serverId,clients:clients.map(c=>({playerId:c.welcome.playerId,tick:c.tick,ack:c.ack,packets:c.packets,path:c.peer.path()}))}));
+  for(const c of clients){assert(c.tick>c.firstTick+30);assert(c.packets>10);assert.equal(c.peer.path().kind,'relay');assert(c.compactFrames>0,'Host negotiated compact personal metadata');}
+  console.log(JSON.stringify({ok:true,serverId,clients:clients.map(c=>({playerId:c.welcome.playerId,tick:c.tick,ack:c.ack,packets:c.packets,compactFrames:c.compactFrames,path:c.peer.path()}))}));
 } finally {for(const c of clients){c.peer.close();c.master.close();}rtc.cleanup();await rm(directory,{recursive:true,force:true});}

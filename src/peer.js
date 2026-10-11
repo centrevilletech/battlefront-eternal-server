@@ -127,7 +127,7 @@ export class Peer extends EventEmitter {
         this.emit("message", label, m);
       } catch (error) {
         this.emit("fault", error.message);
-        this.close();
+        this.close("invalid-message");
       }
     });
     if (ch.isOpen() && label === "events") this.hello();
