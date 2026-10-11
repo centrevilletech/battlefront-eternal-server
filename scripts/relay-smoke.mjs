@@ -69,8 +69,8 @@ try {
       ipFamily: bFamily,
       portable: bFamily !== 0 || type !== "TurnUdp",
     });
-    a.on("signal", (s) => b.signal(s));
-    b.on("signal", (s) => a.signal(s));
+    a.on("signal", (s) => { if (/typ (host|srflx|prflx)(?: |\r|\n|$)/.test(s.sdp ?? s.candidate ?? "")) throw Error("relay-only signal exposed a direct candidate"); b.signal(s); });
+    b.on("signal", (s) => { if (/typ (host|srflx|prflx)(?: |\r|\n|$)/.test(s.sdp ?? s.candidate ?? "")) throw Error("relay-only signal exposed a direct candidate"); a.signal(s); });
     let deadline;
     const timeout = new Promise((_, reject) => {
       deadline = setTimeout(
