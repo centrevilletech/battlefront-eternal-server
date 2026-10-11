@@ -12,3 +12,17 @@ test('reliable backlog bounds memory and disconnects a stalled client',()=>{cons
 test('raw world inspection cannot exceed channel limits or expose another client state',()=>{const {peer,world,session}=setup();try{peer.emit('message','events',{type:'call',id:4,method:'worldState'});assert.equal(peer.sent.at(-1)[1].error,'Unsupported operation');assert.equal(world.sent.length,1);}finally{session.close();}});
 
 test('chat is bounded, rate limited and never trusts sender identity',()=>{const {peer,world,session}=setup();try{for(let i=0;i<6;i++)peer.emit('message','events',{type:'chat',text:'hello\u0000',client:'victim',sender:'Admin',team:true});const messages=world.sent.filter(m=>m.type==='chat');assert.equal(messages.length,4);assert(messages.every(m=>m.client==='player'&&m.text==='hello'&&m.team===true&&!m.sender));}finally{session.close();}});
+
+test('stale reliable backlog resets the delta chain and waits for a fresh keyframe',()=>{
+  const {peer,world,session}=setup();
+  try {
+    peer.send=()=>false;
+    session.queue.push({type:'ticks',buffers:['old'],queuedAt:performance.now()-2100});session.bytes=3;
+    session.flush();assert(session.awaitKeyframe);assert.equal(world.sent.at(-1).type,'resync');assert.equal(session.queue[0].type,'reset');
+    world.emit('message',{type:'packet',client:'player',buffer:Buffer.from('stale delta'),keyframe:false});assert.equal(session.queue.length,1);
+    peer.sent=[];peer.send=(channel,message)=>{peer.sent.push(message);return true;};
+    world.emit('message',{type:'packet',client:'player',buffer:Buffer.from('fresh keyframe'),keyframe:true});
+    assert.equal(session.awaitKeyframe,false);assert.equal(peer.sent[0].type,'reset');assert.equal(peer.sent[1].type,'ticks');
+    assert.equal(inflateSync(Buffer.from(peer.sent[1].buffers[0],'base64')).toString(),'fresh keyframe');assert.equal(session.bytes,0);
+  }finally{session.close();}
+});

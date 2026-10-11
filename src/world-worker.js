@@ -16,9 +16,10 @@ try {
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   const publish = () => {
     for (const [client, state] of clients) if (state.started) {
-      const buffer = world.snapshot(client, { keyframe: state.keyframe });
+      const keyframe = Boolean(state.keyframe);
+      const buffer = world.snapshot(client, { keyframe });
       state.keyframe = false;
-      if (buffer) parentPort.postMessage({ type: 'packet', client, buffer }, [buffer]);
+      if (buffer) parentPort.postMessage({ type: 'packet', client, buffer, keyframe }, [buffer]);
     }
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.

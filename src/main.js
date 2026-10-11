@@ -123,7 +123,7 @@ async function serve() {
     error = null;
   const operator = new OperatorStore(directory);
   const admin = operatorHandler(directory, async command => {
-    if(command.action==='status')return {status,tick,players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
+    if(command.action==='status')return {status,tick,bans:operator.bans(),players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
     if(command.action==='stats')return {players:operator.stats(command.id)};
     if(command.action==='unban'){operator.unban(command.id);return {ok:true};}
     if(command.action==='ban')operator.ban(command.id,command.hours,command.reason);

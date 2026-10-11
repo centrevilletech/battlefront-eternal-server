@@ -11,6 +11,7 @@ export class OperatorStore {
       CREATE TABLE IF NOT EXISTS scores(match TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,kills INTEGER NOT NULL,deaths INTEGER NOT NULL,points INTEGER NOT NULL,updated INTEGER NOT NULL,PRIMARY KEY(match,id));
       CREATE TABLE IF NOT EXISTS audit(time INTEGER NOT NULL,action TEXT NOT NULL,id TEXT,reason TEXT);`);
   }
+  bans() { return this.db.prepare('SELECT id,expires,reason FROM bans WHERE expires=0 OR expires>? ORDER BY id LIMIT 1000').all(Date.now()); }
   banned(id) {const row=this.db.prepare('SELECT expires FROM bans WHERE id=?').get(id);return Boolean(row && (!row.expires || row.expires>Date.now()));}
   ban(id,hours,reason='') {if(!identity(id)||!Number.isFinite(hours)||hours<0||hours>8760)throw Error('Invalid identity or ban duration');this.db.prepare('INSERT OR REPLACE INTO bans VALUES(?,?,?)').run(id,hours?Date.now()+hours*3600000:0,String(reason).slice(0,240));this.audit('ban',id,reason);}
   unban(id) {if(!identity(id))throw Error('Invalid identity');this.db.prepare('DELETE FROM bans WHERE id=?').run(id);this.audit('unban',id,'');}

@@ -6,7 +6,11 @@ export class GameSession {
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false;
     this.listener = (m) => {
       if (m.client !== id) return;
-      if (m.type === 'packet') this.packet(m.buffer);
+      if (m.type === 'packet') {
+        if (this.awaitKeyframe && !m.keyframe) return;
+        if (m.keyframe) this.awaitKeyframe = false;
+        this.packet(m.buffer);
+      }
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
       else if (m.type === 'chat') peer.send('events', m);
       else if (m.type === 'reply') { peer.send('events', m); if(m.error && m.id === undefined)peer.close(); }
@@ -37,21 +41,27 @@ export class GameSession {
       this.world.postMessage({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });
     } else if (m.type === 'resync') this.world.postMessage({ type: 'resync', client: this.id });
   }
+  enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
   packet(buffer) {
     const data = deflateSync(Buffer.from(buffer), { level: 3 }).toString('base64');
     if (data.length > 2 * 1024 * 1024 || this.bytes + data.length > 4 * 1024 * 1024) return this.peer.close();
     const id = ++this.serial, total = Math.ceil(data.length / 20000);
-    if (total === 1) this.queue.push({ type: 'ticks', encoding: 'deflate', buffers: [data] });
-    else for (let index = 0; index < total; index++) this.queue.push({ type: 'packet', encoding: 'deflate', id, index, total, data: data.slice(index * 20000, (index + 1) * 20000) });
+    if (total === 1) this.enqueue({ type: 'ticks', encoding: 'deflate', buffers: [data] });
+    else for (let index = 0; index < total; index++) this.enqueue({ type: 'packet', encoding: 'deflate', id, index, total, data: data.slice(index * 20000, (index + 1) * 20000) });
     this.bytes += data.length;
     this.flush();
   }
   flush() {
+    if (this.queue.length && performance.now() - this.queue[0].queuedAt > 2000) {
+      this.queue.length = 0; this.bytes = 0; this.awaitKeyframe = true;
+      this.enqueue({type:'reset'});
+      this.world.postMessage({type:'resync',client:this.id});
+    }
     let count = 0;
     while (this.queue.length && count++ < 4) {
       const message = this.queue[0];
       if (!this.peer.send('bulk', message)) break;
-      this.queue.shift(); this.bytes -= message.data?.length ?? message.buffers[0].length;
+      this.queue.shift(); this.bytes -= message.data?.length ?? message.buffers?.[0]?.length ?? 0;
     }
   }
   close() {
