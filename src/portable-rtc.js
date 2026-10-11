@@ -20,6 +20,7 @@ class Channel {
     this.channel.send(value);
     return true;
   }
+  sendMessageBinary(value) {this.channel.send(Buffer.from(value));return true;}
   close() {
     this.channel.close();
   }

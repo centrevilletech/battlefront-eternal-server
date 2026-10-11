@@ -3,6 +3,7 @@ import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { decodeBulkFrame } from '../src/bulk-frame.js';
 import { GameSession, compressionStats } from '../src/game-session.js';
 function setup(){const peer=new EventEmitter();peer.sent=[];peer.send=(channel,m)=>{peer.sent.push([channel,m]);return true;};peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
 async function drained(session){for(let n=0;n<400;n++){session.flush();if(!session.draining&&!session.pending.length&&!session.queue.length)return;await new Promise(r=>setTimeout(r,5));}throw Error('compression drain timed out');}
@@ -58,4 +59,20 @@ test('compact metadata is enabled only by the authenticated peer capability',()=
  const peer=new EventEmitter();peer.send=()=>true;peer.remote={capabilities:['unknown','compact-personal-v1']};const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);
  const session=new GameSession(peer,world,'authenticated',{});assert.equal(world.sent[0].compactMetadata,true);session.close();
  const plain=setup();assert.equal(plain.world.sent[0].compactMetadata,false);plain.session.close();
+});
+
+test('negotiated binary snapshots preserve compressed bytes and first-fragment metadata',async()=>{
+ const peer=new EventEmitter();peer.remote={capabilities:['binary-bulk-v1']};peer.sent=[];peer.send=()=>true;peer.sendBinary=buffer=>{peer.sent.push(buffer);return true;};peer.close=()=>peer.emit('closed');
+ const world=new EventEmitter();world.postMessage=()=>{};const session=new GameSession(peer,world,'player',{});
+ try{const body=randomBytes(93610);world.emit('message',{type:'packet',client:'player',buffer:body,metadata:{playerId:82}});await drained(session);
+ const frames=peer.sent.map(decodeBulkFrame);assert(frames.length>=4);assert(frames.every((f,i)=>f.index===i&&f.total===frames.length));assert.deepEqual(frames[0].metadata,{playerId:82});assert(frames.slice(1).every(f=>f.metadata===undefined));assert.deepEqual(inflateSync(Buffer.concat(frames.map(f=>f.data))),body);assert.equal(session.bytes,0);
+ }finally{session.close();}
+});
+
+test('reliable actions bind identity independently of state packet sequence',()=>{
+ const {peer,world,session}=setup();try{
+ peer.emit('message','state',{type:'input',command:{sequence:90}});
+ peer.emit('message','events',{type:'actions',client:'victim',epoch:1,id:10,tick:42,generation:1,actions:['jump'],human:[]});
+ const action=world.sent.at(-1);assert.equal(action.type,'actions');assert.equal(action.client,'player');assert.equal(action.envelope.id,10);assert.deepEqual(action.envelope.actions,['jump']);
+ }finally{session.close();}
 });

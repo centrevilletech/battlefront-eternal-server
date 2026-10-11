@@ -32,15 +32,19 @@ try{
  }
  for(let index=0;index<count;index++){
  const child=children[Math.floor(index/8)],host=new Peer({name:'load-server-'+index,keys,simulation:'bfe-sim-2',content:ready.content,portable:false});hosts[index]=host;
- const send=host.send.bind(host),queue=[];let due=0,pumping=false,queuedBytes=0;
- const pump=()=>{pumping=false;while(queue.length&&queue[0].due<=Date.now()){const item=queue[0];if(!send(item.label,item.message))break;if(item.label==='bulk')wire+=item.size;queuedBytes-=item.size;queue.shift();}if(queue.length&&!host.closed){pumping=true;later(pump,Math.max(5,queue[0].due-Date.now()));}};
- host.send=(label,message)=>{const size=Buffer.byteLength(JSON.stringify(message));if(queuedBytes+size>256*1024)return false;due=Math.max(due,Date.now()+latency+random()*jitter)+(label==='bulk'&&random()<loss?retryMs:0);queue.push({label,message,size,due});queuedBytes+=size;if(!pumping){pumping=true;later(pump,Math.max(0,due-Date.now()));}return true;};
+ const send=host.send.bind(host),sendBinary=host.sendBinary.bind(host),queues=new Map();let queuedBytes=0;
+ const enqueue=(label,message)=>{let lane=queues.get(label);if(!lane)queues.set(label,lane={queue:[],due:0,pumping:false});const size=Buffer.isBuffer(message)?message.length:Buffer.byteLength(JSON.stringify(message));if(queuedBytes+size>256*1024)return false;
+ lane.due=Math.max(lane.due,Date.now()+latency+random()*jitter)+(label==='bulk'&&random()<loss?retryMs:0);lane.queue.push({message,size,due:lane.due});queuedBytes+=size;
+ const pump=()=>{lane.pumping=false;while(lane.queue.length&&lane.queue[0].due<=Date.now()){const item=lane.queue[0];if(!(Buffer.isBuffer(item.message)?sendBinary(item.message):send(label,item.message)))break;if(label==='bulk')wire+=item.size;queuedBytes-=item.size;lane.queue.shift();}if(lane.queue.length&&!host.closed){lane.pumping=true;later(pump,Math.max(5,lane.queue[0].due-Date.now()));}};
+ if(!lane.pumping){lane.pumping=true;later(pump,Math.max(0,lane.due-Date.now()));}return true;};
+ host.send=enqueue;host.sendBinary=message=>enqueue('bulk',message);
  host.backlog=()=>queuedBytes;host.on('signal',signal=>child.send({type:'signal',index,signal}));host.once('ready',r=>sessions.push(new GameSession(host,world,r.id,{})));
- child.send({type:'create',index,root,directory,content:ready.content,portable:portableEvery>0&&index%portableEvery===0,loss,jitter,latency,compact:arg('compact',1)!==0});
+ child.send({type:'create',index,root,directory,content:ready.content,portable:portableEvery>0&&index%portableEvery===0,loss,jitter,latency,compact:arg('compact',1)!==0,binary:arg('binary',1)!==0});
  await wait(()=>host.welcomed,'peer '+index);
  }
  world.postMessage({type:'start'});sampler=setInterval(()=>{children.forEach(c=>c.send({type:'sample'}));backlogs.push(...hosts.map(h=>h.backlog()));},250);
  await wait(()=>samples.reduce((n,s)=>n+s.clients.filter(c=>c.packets>0).length,0)===count,'initial frames');
+ await new Promise(r=>setTimeout(r,arg('warmup',5)*1000));world.postMessage({type:'resetMetrics'});ages.length=0;arrivalAges.length=0;backlogs.length=0;compressionStats.durations.length=0;compressionStats.calls=0;loop.reset();
  const begun=performance.now(),startWire=wire,startRaw=raw,cpu=process.cpuUsage(),threadCpu=process.threadCpuUsage();children.forEach(c=>c.send({type:'begin'}));
  await new Promise(r=>setTimeout(r,seconds*1000));if(failed)throw failed;
  clearInterval(sampler);const replies=children.map(c=>receive(c,'result'));children.forEach(c=>c.send({type:'finish'}));const results=(await Promise.all(replies)).flatMap(r=>r.clients);

@@ -60,7 +60,7 @@ export class OnlineServer extends EventEmitter {
         relay: this.config.relayPolicy === 'always', portable, ...this.certificate });
       this.peers.set(m.from, peer);
       peer.on('signal', s => this.master.signal(m.from, s));
-      peer.once('closed', () => this.peers.delete(m.from));
+      peer.once('closed', reason => {this.peers.delete(m.from);if(reason && reason!=='closed')console.warn('Online peer disconnected:',reason);});
       peer.on('fault', error => this.emit('fault', error));
       peer.once('ready', () => { if(this.isBanned(m.from)){peer.close();return;} new GameSession(peer, this.world, m.from, {
         query: this.query, protocol: 1, simulation: this.simulation, content: this.content, serverId: this.id,

@@ -1,3 +1,4 @@
+import {encodeBulkFrame} from './bulk-frame.js';
 import { deflate } from 'node:zlib';
 const sharedCompression = new WeakMap();
 export const compressionStats = { calls:0, durations:[] };
@@ -6,9 +7,9 @@ function compress(world, buffer, sharedId) {
   if(!cache)sharedCompression.set(world,cache=new Map());
   if(sharedId!==undefined && cache.has(sharedId))return cache.get(sharedId);
   const begun=performance.now(); compressionStats.calls++;
-  const promise=new Promise((resolve,reject)=>deflate(Buffer.from(buffer),{level:3},(error,result)=>{
+  const promise=new Promise((resolve,reject)=>deflate(Buffer.from(buffer),{level:6},(error,result)=>{
     compressionStats.durations.push(performance.now()-begun);if(compressionStats.durations.length>4096)compressionStats.durations.shift();
-    if(error)reject(error);else resolve(result.toString('base64'));
+    if(error)reject(error);else resolve({buffer:result,base64:null});
   }));
   if(sharedId!==undefined){cache.set(sharedId,promise);while(cache.size>4)cache.delete(cache.keys().next().value);}
   return promise;
@@ -17,7 +18,7 @@ function compress(world, buffer, sharedId) {
 // existing engine delta chain; inputs use the unordered state channel.
 export class GameSession {
   constructor(peer, world, id, welcome) {
-    this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;
+    this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;this.binary=Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('binary-bulk-v1')&&typeof peer.sendBinary==='function';
     this.listener = (m) => {
       const recipient = m.recipients?.find(value=>value.client===id);
       if (m.client !== id && !recipient) return;
@@ -27,7 +28,7 @@ export class GameSession {
         if (m.keyframe) this.awaitKeyframe = false;
         this.packet(m.buffer,m.metadata,m.sharedId);
       }
-      else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
+      else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, binaryBulk:this.binary, ...m.player, playerId: m.player.unitId, tick: m.tick });
       else if (m.type === 'fireAck') peer.send('events',m);
       else if (m.type === 'chat') peer.send('events', m);
       else if (m.type === 'reply') { peer.send('events', m); if(m.error && m.id === undefined)peer.close('invalid-input'); }
@@ -37,11 +38,15 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
     if(this.closed)return;
-    if(m.type==='fire') {
+    if(m.type==='actions'){
+      if(label!=='events'||!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.actions)||m.actions.length>64||!Array.isArray(m.human)||m.human.length>8)return this.peer.close('invalid-actions');
+      const now=Date.now();if(now-(this.actionWindow??0)>=1000){this.actionWindow=now;this.actionCount=0;}if(++this.actionCount>120)return this.peer.close('action-flood');
+      this.world.postMessage({type:'actions',client:this.id,envelope:{epoch:m.epoch,id:m.id,tick:m.tick,generation:m.generation,actions:m.actions,human:m.human}});
+    }else if(m.type==='fire') {
       if(label!=='events')return;
       if(!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||![0,1].includes(m.button)||typeof m.pressed!=='boolean')return this.peer.close();
       const now=Date.now();if(now-(this.fireWindow??0)>=1000){this.fireWindow=now;this.fireCount=0;}
@@ -89,12 +94,14 @@ export class GameSession {
     try {
       while(this.pending.length && !this.closed) {
         const item=this.pending.shift();this.inflight=item;
-        const data=await item.promise;
+        const compressed=await item.promise;
+        const data=this.binary?compressed.buffer:(compressed.base64??=compressed.buffer.toString('base64'));
         if(this.closed || item.epoch!==this.compressionEpoch)continue;
         this.rawBytes-=item.bytes;
         if(this.bytes+data.length>4*1024*1024){this.peer.close('compressed-memory-limit');break;}
         const id=++this.serial,total=Math.ceil(data.length/20000),extra=item.metadata?{metadata:item.metadata}:{};
-        if(total===1)this.enqueue({type:'ticks',encoding:'deflate',buffers:[data],...extra});
+        if(this.binary){for(let index=0;index<total;index++)this.enqueue({binary:encodeBulkFrame({id:id>>>0,index,total,data:data.subarray(index*20000,(index+1)*20000),...(index===0?extra:{})}),payloadBytes:Math.min(20000,data.length-index*20000)});}
+        else if(total===1)this.enqueue({type:'ticks',encoding:'deflate',buffers:[data],...extra});
         else for(let index=0;index<total;index++)this.enqueue({type:'packet',encoding:'deflate',id,index,total,data:data.slice(index*20000,(index+1)*20000),...(index===0?extra:{})});
         this.bytes+=data.length;this.inflight=null;this.flush();
       }
@@ -110,8 +117,8 @@ export class GameSession {
     let count = 0;
     while (this.queue.length && count++ < 4) {
       const message = this.queue[0];
-      if (!this.peer.send('bulk', message)) break;
-      this.queue.shift(); this.bytes -= message.data?.length ?? message.buffers?.[0]?.length ?? 0;
+      if (!(message.binary?this.peer.sendBinary(message.binary):this.peer.send('bulk', message))) break;
+      this.queue.shift(); this.bytes -= message.payloadBytes ?? message.data?.length ?? message.buffers?.[0]?.length ?? 0;
     }
   }
   close() {
