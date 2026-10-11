@@ -28,7 +28,7 @@ const entry = {
 try {
   await master.request("/v1/servers", "POST", entry);
   registered = true;
-  const cases = [
+  const cases = process.argv.includes("--mixed") ? [["TurnTcp",0,0,"TurnUdp"],["TurnTls",0,0,"TurnUdp"]] : [
     ["TurnUdp", 0, 0],
     ["TurnTcp", 0, 0],
     ["TurnTls", 0, 0],
@@ -36,7 +36,7 @@ try {
     ["TurnUdp", 4, 6],
     ["TurnUdp", 6, 4],
   ];
-  for (const [index, [type, aFamily, bFamily]] of cases.entries()) {
+  for (const [index, [type, aFamily, bFamily, serverType = type]] of cases.entries()) {
     // Each case uses a new client identity to avoid retaining allocations from a
     // just-closed prior case under the same four-allocation username quota.
     await master.request("/v1/servers/" + master.id, "PUT", entry);
@@ -45,7 +45,8 @@ try {
       keys: loadIdentity(join(dir, `credential-${index}`)),
       noticeAccepted: true,
     });
-    const ice = (await credentials.credentials(master.id)).find(
+    const granted = await credentials.credentials(master.id);
+    const ice = granted.find(
       (i) => i.relayType === type,
     );
     const a = new Peer({
@@ -62,12 +63,12 @@ try {
     const b = new Peer({
       name: "probe-b",
       keys: loadIdentity(join(dir, "peer")),
-      iceServers: [ice],
+      iceServers: [granted.find(i=>i.relayType===serverType)],
       relay: true,
       simulation: "test",
       content: "test",
       ipFamily: bFamily,
-      portable: bFamily !== 0 || type !== "TurnUdp",
+      portable: bFamily !== 0 || serverType !== "TurnUdp",
     });
     a.on("signal", (s) => { if (/typ (host|srflx|prflx)(?: |\r|\n|$)/.test(s.sdp ?? s.candidate ?? "")) throw Error("relay-only signal exposed a direct candidate"); b.signal(s); });
     b.on("signal", (s) => { if (/typ (host|srflx|prflx)(?: |\r|\n|$)/.test(s.sdp ?? s.candidate ?? "")) throw Error("relay-only signal exposed a direct candidate"); a.signal(s); });
@@ -97,7 +98,7 @@ try {
       if ((await Promise.race([reply, timeout])).value !== result.value)
         throw Error("bad relay reply");
       console.log(
-        `${type} ${aFamily || "auto"}->${bFamily || "auto"}: ${JSON.stringify(a.path())}, authenticated roundtrip ${Math.round(performance.now() - start)} ms`,
+        `${type}/${serverType} ${aFamily || "auto"}->${bFamily || "auto"}: ${JSON.stringify(a.path())}, authenticated roundtrip ${Math.round(performance.now() - start)} ms`,
       );
     } finally {
       clearTimeout(deadline);

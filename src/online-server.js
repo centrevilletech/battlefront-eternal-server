@@ -52,9 +52,12 @@ export class OnlineServer extends EventEmitter {
       let iceServers = [];
       try { if (this.config.relayPolicy !== 'never') iceServers = await this.master.credentials(this.id, m.from); }
       catch (e) { if (this.config.relayPolicy === 'always') { this.pending.delete(m.from); throw e; } }
+      const portable = process.env.BFE_PORTABLE_RTC === '1' || this.config.portableRTC === true;
+      // A native host uses UDP to its relay; clients may independently use TCP/TLS.
+      if (!portable) iceServers = iceServers.filter(server => !server.relayType || server.relayType === 'TurnUdp');
       peer = new Peer({ name: m.from, keys: this.keys, expectedKey: m.from,
         simulation: this.simulation, content: this.content, iceServers,
-        relay: this.config.relayPolicy === 'always', portable: true, ...this.certificate });
+        relay: this.config.relayPolicy === 'always', portable, ...this.certificate });
       this.peers.set(m.from, peer);
       peer.on('signal', s => this.master.signal(m.from, s));
       peer.once('closed', () => this.peers.delete(m.from));
