@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib';
 // Application protocol above authenticated WebRTC. Reliable packets preserve the
 // existing engine delta chain; inputs use the unordered state channel.
 export class GameSession {
@@ -28,11 +29,11 @@ export class GameSession {
     } else if (m.type === 'resync') this.world.postMessage({ type: 'resync', client: this.id });
   }
   packet(buffer) {
-    const data = Buffer.from(buffer).toString('base64');
+    const data = deflateSync(Buffer.from(buffer), { level: 3 }).toString('base64');
     if (data.length > 2 * 1024 * 1024 || this.bytes + data.length > 4 * 1024 * 1024) return this.peer.close();
     const id = ++this.serial, total = Math.ceil(data.length / 20000);
-    if (total === 1) this.queue.push({ type: 'ticks', buffers: [data] });
-    else for (let index = 0; index < total; index++) this.queue.push({ type: 'packet', id, index, total, data: data.slice(index * 20000, (index + 1) * 20000) });
+    if (total === 1) this.queue.push({ type: 'ticks', encoding: 'deflate', buffers: [data] });
+    else for (let index = 0; index < total; index++) this.queue.push({ type: 'packet', encoding: 'deflate', id, index, total, data: data.slice(index * 20000, (index + 1) * 20000) });
     this.bytes += data.length;
     this.flush();
   }

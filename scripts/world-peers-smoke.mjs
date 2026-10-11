@@ -30,11 +30,13 @@ try {
     a.send('events',{type:'call',id:1,method:'start',args:{}}); await reply;
   }
   assert.notEqual(clients[0].w.playerId,clients[1].w.playerId);
+  let first, last;
   for(let tick=1;tick<=90;tick++) {
-    for(const [i,c]of clients.entries())c.peer.send('state',{type:'input',command:{epoch:1,sequence:tick,tick,generation:c.w.generation,down:[i?'moveBackward':'moveForward'],actions:[],look:[]}});
+    for(const [i,c]of clients.entries())c.peer.send('state',{type:'input',command:{epoch:1,sequence:tick,tick,generation:c.w.generation,down:[i?'KeyS':'KeyW'],actions:[],look:[]}});
     await new Promise(r=>setTimeout(r,2));
-    const state=message(worker,m=>m.type==='state');worker.postMessage({type:'step',count:1});await state;
+    const state=message(worker,m=>m.type==='state');worker.postMessage({type:'step',count:1});last=(await state).state;first ??= last;
   }
+  for(const c of clients){const a=first.units.find(u=>u[0]===c.w.playerId),b=last.units.find(u=>u[0]===c.w.playerId);assert(Math.hypot(b[4]-a[4],b[6]-a[6])>1,'player moves independently');}
   assert(clients.every(c=>c.packets.length>10),'both peers receive authoritative packets');
-  console.log(JSON.stringify({ok:true,players:clients.map(c=>c.w.playerId),packets:clients.map(c=>c.packets.length),ticks:90}));
+  console.log(JSON.stringify({ok:true,players:clients.map(c=>c.w.playerId),packets:clients.map(c=>c.packets.length),ticks:90,wireBytes:clients.map(c=>c.packets.reduce((sum,m)=>sum+JSON.stringify(m).length,0))}));
 } finally {clearTimeout(timer);for(const p of peers)p.close();await worker.terminate();rtc.cleanup();await rm(directory,{recursive:true,force:true});}

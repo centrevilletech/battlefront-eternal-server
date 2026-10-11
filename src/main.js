@@ -71,9 +71,6 @@ async function menu() {
         );
         config.onlineNoticeAccepted =
           (await io.question("Accept online processing? Type yes: ")) === "yes";
-        const keys = loadIdentity(join(directory, 'identity.json'));
-        try { local = await startLocalServer({ config, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
-        catch(e) { error=e.message; console.error('LAN listener:',e.message); }
         if (config.onlineNoticeAccepted) {
           const u = new URL(await io.question("Master URL: "));
           if (u.protocol !== "https:") throw Error("HTTPS required");
