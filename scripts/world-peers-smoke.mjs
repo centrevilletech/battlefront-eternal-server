@@ -36,6 +36,13 @@ try {
     a.send('events',{type:'call',id:1,method:'start',args:{}}); await reply;
   }
   assert.notEqual(clients[0].w.playerId,clients[1].w.playerId);
+  const chats=clients.map(()=>[]);
+  clients.forEach((client,i)=>client.peer.on('message',(_,m)=>{if(m.type==='chat')chats[i].push(m);}));
+  clients[0].peer.send('events',{type:'chat',text:'global acceptance',team:false});
+  clients[0].peer.send('events',{type:'chat',text:'team acceptance',team:true});
+  for(let wait=0;wait<50 && (chats[0].length<2 || chats[1].length<1);wait++)await new Promise(r=>setTimeout(r,100));
+  assert.deepEqual(chats[0].map(m=>m.text),['global acceptance','team acceptance']);
+  assert.deepEqual(chats[1].map(m=>m.text),['global acceptance']);
   let first, last;
   for(let tick=1;tick<=90;tick++) {
     for(const [i,c]of clients.entries())c.peer.send('state',{type:'input',command:{epoch:1,sequence:tick,tick,generation:c.w.generation,down:[i?'KeyS':'KeyW'],actions:[],look:[]}});
