@@ -17,6 +17,9 @@ try {
   const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
+  let Journal;
+  try { ({SnapshotJournal:Journal}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-journal.js')))); } catch {}
+  let journal,lastJournalId;
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
@@ -36,7 +39,34 @@ try {
       if(!group)groups.set(packet.sharedId,group={type:'packet',sharedId:packet.sharedId,buffer:packet.buffer.slice(0),recipients:[]});
       group.recipients.push({client,keyframe,metadata:state.compactMetadata && typeof compactMetadata==='function' ? compactMetadata(packet.metadata) : packet.metadata});
     }
-    for(const group of groups.values())parentPort.postMessage(group,[group.buffer]);
+    for(const group of groups.values()) {
+      const journalRecipients=group.recipients.filter(r=>clients.get(r.client).journal);
+      if(journalRecipients.length) {
+        journal??=new Journal();
+        if(lastJournalId!==group.sharedId) {
+          const events=journal.push(group.buffer);lastJournalId=group.sharedId;
+          if(events.calls.length)parentPort.postMessage({type:'journalEvents',sharedId:`events:${events.epoch}:${events.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...events})).buffer,recipients:journalRecipients});
+        }
+        const encoded=new Map();
+        for(const recipient of journalRecipients) {
+          const state=clients.get(recipient.client),ack=state.snapshotAck;
+          let baseTick=ack?.epoch===journal.epoch && journal.snapshots.has(ack.tick)?ack.tick:null;
+          if(baseTick===journal.current.tick)continue;
+          const reliable=baseTick===null,now=performance.now();
+          if(reliable&&state.bootstrapEpoch===journal.epoch&&now-(state.bootstrapAt??0)<1000)continue;
+          const checkpoint=reliable||journal.current.tick%15===0;
+          const key=`journal:${journal.epoch}:${journal.current.tick}:${baseTick}:${checkpoint}`;
+          let batch=encoded.get(key);
+          if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick,checkpoint}),reliable,recipients:[]});
+          batch.recipients.push(recipient);
+          if(checkpoint){state.checkpoints.set(journal.current.tick,journal.epoch);while(state.checkpoints.size>16)state.checkpoints.delete(state.checkpoints.keys().next().value);}
+          if(reliable){state.bootstrapAt=now;state.bootstrapEpoch=journal.epoch;}
+        }
+        for(const batch of encoded.values())parentPort.postMessage(batch,[batch.buffer]);
+      }
+      group.recipients=group.recipients.filter(r=>!clients.get(r.client).journal);
+      if(group.recipients.length)parentPort.postMessage(group,[group.buffer]);
+    }
     measure('encode',performance.now()-begun);
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
@@ -56,9 +86,11 @@ try {
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true });
-        parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
+        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,checkpoints:new Map() });
+        parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:'journal-v1'}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
+      else if(m.type==='snapshotAck') {const state=clients.get(m.client);if(state?.journal&&state.checkpoints.get(m.tick)===m.epoch&&(!state.snapshotAck||m.epoch>state.snapshotAck.epoch||m.epoch===state.snapshotAck.epoch&&m.tick>state.snapshotAck.tick))state.snapshotAck={epoch:m.epoch,tick:m.tick};}
+      else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){state.snapshotAck=null;state.bootstrapAt=0;}}
       else if(m.type==='actions'){if(clients.get(m.client)?.started)world.actions?.(m.client,m.envelope);}
       else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
       else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }

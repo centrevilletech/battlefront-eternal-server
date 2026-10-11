@@ -12,7 +12,7 @@ import {GameSession,compressionStats} from '../src/game-session.js';
 import {loadIdentity} from '../src/identity.js';
 const arg=(name,fallback)=>Number(process.argv.find(v=>v.startsWith('--'+name+'='))?.split('=')[1]??fallback);
 const count=arg('players',64),seconds=arg('seconds',30),loss=arg('loss',.05),jitter=arg('jitter',50),latency=arg('latency',50),portableEvery=arg('portable-every',8),retryMs=arg('retry-ms',200);
-if(![1,8,32,64].includes(count)||seconds<1||seconds>600||loss<0||loss>.5)throw Error('Invalid scenario');
+if(![1,2,8,32,64].includes(count)||seconds<1||seconds>600||loss<0||loss>.5)throw Error('Invalid scenario');
 const directory=await mkdtemp(join(tmpdir(),'bfe-load-')),root=resolve(process.env.BFE_ENGINE_DIR??'../battlefront-eternal');
 const world=new Worker(new URL('../src/world-worker.js',import.meta.url),{workerData:{engine:root,data:resolve(process.env.BFE_DATA_DIR??'../battlefront-eternal/public'),maxPlayers:64,armySize:32,metrics:true,profile:process.argv.find(value=>value.startsWith('--profile='))?.slice(10)}});
 const hosts=[],sessions=[],children=[],samples=[],ages=[],arrivalAges=[],backlogs=[],timers=new Set();let failed,wire=0,raw=0,seed=42,sampler,totalRss=0,serverTick=0;
@@ -33,13 +33,13 @@ try{
  for(let index=0;index<count;index++){
  const child=children[Math.floor(index/8)],host=new Peer({name:'load-server-'+index,keys,simulation:'bfe-sim-2',content:ready.content,portable:false});hosts[index]=host;
  const send=host.send.bind(host),sendBinary=host.sendBinary.bind(host),queues=new Map();let queuedBytes=0;
- const enqueue=(label,message)=>{let lane=queues.get(label);if(!lane)queues.set(label,lane={queue:[],due:0,pumping:false});const size=Buffer.isBuffer(message)?message.length:Buffer.byteLength(JSON.stringify(message));if(queuedBytes+size>256*1024)return false;
+ const enqueue=(label,message)=>{if(label==='state'){if(random()<loss)return true;later(()=>{if(sendBinary(message,'state'))wire+=message.length;},latency+random()*jitter);return true;}let lane=queues.get(label);if(!lane)queues.set(label,lane={queue:[],due:0,pumping:false});const size=Buffer.isBuffer(message)?message.length:Buffer.byteLength(JSON.stringify(message));if(queuedBytes+size>256*1024)return false;
  lane.due=Math.max(lane.due,Date.now()+latency+random()*jitter)+(label==='bulk'&&random()<loss?retryMs:0);lane.queue.push({message,size,due:lane.due});queuedBytes+=size;
  const pump=()=>{lane.pumping=false;while(lane.queue.length&&lane.queue[0].due<=Date.now()){const item=lane.queue[0];if(!(Buffer.isBuffer(item.message)?sendBinary(item.message):send(label,item.message)))break;if(label==='bulk')wire+=item.size;queuedBytes-=item.size;lane.queue.shift();}if(lane.queue.length&&!host.closed){lane.pumping=true;later(pump,Math.max(5,lane.queue[0].due-Date.now()));}};
  if(!lane.pumping){lane.pumping=true;later(pump,Math.max(0,lane.due-Date.now()));}return true;};
- host.send=enqueue;host.sendBinary=message=>enqueue('bulk',message);
+ host.send=enqueue;host.sendBinary=(message,label='bulk')=>enqueue(label,message);
  host.backlog=()=>queuedBytes;host.on('signal',signal=>child.send({type:'signal',index,signal}));host.once('ready',r=>sessions.push(new GameSession(host,world,r.id,{})));
- child.send({type:'create',index,root,directory,content:ready.content,portable:portableEvery>0&&index%portableEvery===0,loss,jitter,latency,compact:arg('compact',1)!==0,binary:arg('binary',1)!==0,linear:arg('linear',1)!==0,backups:arg('backups',1)});
+ child.send({type:'create',index,root,directory,content:ready.content,portable:portableEvery>0&&index%portableEvery===0,loss,jitter,latency,compact:arg('compact',1)!==0,binary:arg('binary',1)!==0,linear:arg('linear',1)!==0,backups:arg('backups',1),journal:arg('journal',0)!==0});
  await wait(()=>host.welcomed,'peer '+index);
  }
  world.postMessage({type:'start'});sampler=setInterval(()=>{children.forEach(c=>c.send({type:'sample'}));backlogs.push(...hosts.map(h=>h.backlog()));},250);

@@ -25,7 +25,7 @@ export class Peer extends EventEmitter {
   }) {
     super();
     this.keys = keys;
-    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1'].includes(value));
+    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1'].includes(value));
     this.initiator = initiator;
     this.expectedKey = expectedKey;
     this.compatibility = { protocol, simulation, content };
@@ -99,7 +99,7 @@ export class Peer extends EventEmitter {
     });
     ch.onMessage((raw) => {
       try {
-        if(typeof raw!=='string' && label==='bulk' && this.authenticated && this.capabilities.includes('binary-bulk-v1')){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes);return;}
+        if(typeof raw!=='string' && (label==='bulk'||label==='state') && this.authenticated && (this.capabilities.includes('binary-bulk-v1')||this.capabilities.includes('snapshot-journal-v1'))){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
         if (typeof raw !== "string" || Buffer.byteLength(raw) > 32768)
           throw Error("invalid message");
         const m = JSON.parse(raw);
@@ -240,8 +240,9 @@ export class Peer extends EventEmitter {
     }
     return ch.sendMessage(data);
   }
-  sendBinary(value) {
-    const ch=this.channels.get('bulk');if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>65536)return false;
+  sendBinary(value,label='bulk') {
+    if(!['bulk','state'].includes(label))throw Error('Invalid binary channel');
+    const ch=this.channels.get(label);if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>65536)return false;
     if(value.byteLength>32768)throw Error('binary message too large');return ch.sendMessageBinary(Buffer.from(value));
   }
   path() {

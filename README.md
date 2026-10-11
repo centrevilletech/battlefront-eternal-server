@@ -75,3 +75,12 @@ Authenticated hello capabilities keep older clients compatible:
 - `linear-projectiles-v1` enables shared linear projectile events only while every started client advertises support. A legacy client starting or a capable client leaving recomputes support and forces a fresh keyframe when the shared mode changes.
 
 The load harness enables these capabilities by default. Use `--binary=0`, `--compact=0`, or `--linear=0` for comparisons. It excludes a five-second warmup from reported measurements (`--warmup=0` disables that). `--profile=/tmp/world.cpuprofile` captures the worker's V8 CPU profile; `node scripts/profile-summary.mjs /tmp/world.cpuprofile` prints the hottest call sites. Profile paths are local operator arguments and are never accepted from a remote peer.
+
+The experimental `snapshot-journal-v1` capability is opt-in. It sends acknowledged
+checkpoint deltas on the unordered state channel, with bootstrap snapshots and
+compressed event batches on reliable bulk. Peers without this capability keep
+the existing ordered snapshot stream. Checkpoint ACKs are accepted only for
+snapshots published to that authenticated peer; expired baselines bootstrap
+again. This path is under qualification and is not enabled by default. Local
+qualification can select it with `node scripts/load-peers.mjs --players=2
+--seconds=10 --journal=1`; these measurements exclude Internet TURN capacity.

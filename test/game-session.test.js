@@ -76,3 +76,19 @@ test('reliable actions bind identity independently of state packet sequence',()=
  const action=world.sent.at(-1);assert.equal(action.type,'actions');assert.equal(action.client,'player');assert.equal(action.envelope.id,10);assert.deepEqual(action.envelope.actions,['jump']);
  }finally{session.close();}
 });
+
+test('journal uses unordered state, reliable compressed events and identity-bound checkpoint ACKs',async()=>{
+ const peer=new EventEmitter();peer.remote={capabilities:['snapshot-journal-v1']};peer.sent=[];peer.send=()=>true;peer.sendBinary=(buffer,lane='bulk')=>{peer.sent.push({lane,frame:decodeBulkFrame(buffer)});return true;};peer.close=()=>peer.emit('closed');
+ const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
+ try{
+ assert.equal(world.sent[0].journal,true);
+ await session.unorderedSnapshot({buffer:Buffer.from('replaceable'),sharedId:'state:1',metadata:{playerId:1}});
+ assert.equal(peer.sent[0].lane,'state');assert.equal(peer.sent[0].frame.magic,0x32424642);
+ world.emit('message',{type:'journalEvents',client:'player',buffer:Buffer.from('{"calls":[]}'),sharedId:'events:1'});
+ await drained(session);assert.equal(peer.sent[1].lane,'bulk');assert.equal(peer.sent[1].frame.magic,0x33424642);assert.equal(inflateSync(peer.sent[1].frame.data).toString(),'{"calls":[]}');
+ world.emit('message',{type:'journalPacket',client:'player',buffer:Buffer.from('bootstrap'),sharedId:'bootstrap:1',reliable:true});await drained(session);
+ assert.equal(peer.sent[2].lane,'bulk');assert.equal(peer.sent[2].frame.magic,0x32424642);
+ peer.emit('message','events',{type:'snapshot-ack',epoch:2,tick:45,client:'victim'});assert.deepEqual(world.sent.at(-1),{type:'snapshotAck',client:'player',epoch:2,tick:45});
+ peer.emit('message','events',{type:'snapshot-resync'});assert.equal(world.sent.at(-1).type,'snapshotResync');
+ }finally{session.close();}
+});

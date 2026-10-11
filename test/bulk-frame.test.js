@@ -19,12 +19,12 @@ test('binary bulk rejects malformed lengths, duplicate metadata positions, and e
 test('authenticated native and portable peers exchange raw binary bulk in both directions',{timeout:15000},async()=>{
  const dir=await mkdtemp(join(tmpdir(),'bfe-binary-'));let a,b;
  try{
-  const options={simulation:'test',content:'test',capabilities:['binary-bulk-v1']};
+  const options={simulation:'test',content:'test',capabilities:['binary-bulk-v1','snapshot-journal-v1']};
   a=new Peer({...options,name:'portable',portable:true,initiator:true,keys:loadIdentity(join(dir,'a'))});
   b=new Peer({...options,name:'native',portable:false,keys:loadIdentity(join(dir,'b'))});
   a.on('signal',value=>b.signal(value));b.on('signal',value=>a.signal(value));
   await Promise.all([new Promise(r=>a.once('ready',r)),new Promise(r=>b.once('ready',r))]);
   const frame=encodeBulkFrame({id:42,index:0,total:1,data:randomBytes(20000),metadata:{compact:1}});
-  for(const [sender,receiver]of[[a,b],[b,a]]){const got=new Promise(r=>receiver.once('binary',r));assert(sender.sendBinary(frame));assert.deepEqual(await got,frame);}
+  for(const [sender,receiver,lane]of[[a,b,'bulk'],[b,a,'bulk'],[b,a,'state']]){const got=new Promise(r=>receiver.once('binary',r));assert(sender.sendBinary(frame,lane));assert.deepEqual(await got,frame);}
  }finally{a?.close();b?.close();rtc.cleanup();await rm(dir,{recursive:true,force:true});}
 });
