@@ -32,3 +32,14 @@ test('shared world snapshots compress once while each recipient retains personal
  const {peer,world,session}=setup();const second=new EventEmitter();second.sent=[];second.send=(channel,m)=>{second.sent.push(m);return true;};second.close=()=>second.emit('closed');const other=new GameSession(second,world,'second',{});
  try{const calls=compressionStats.calls;world.emit('message',{type:'packet',sharedId:1,buffer:Buffer.from('shared world'),recipients:[{client:'player',metadata:{playerId:82},keyframe:true},{client:'second',metadata:{playerId:83},keyframe:true}]});await Promise.all([drained(session),drained(other)]);assert.equal(compressionStats.calls-calls,1);assert.equal(peer.sent[0][1].metadata.playerId,82);assert.equal(second.sent[0].metadata.playerId,83);assert.equal(peer.sent[0][1].buffers[0],second.sent[0].buffers[0]);}finally{session.close();other.close();}
 });
+
+test('fire edges use reliable events, bind authenticated identity, and cap floods',()=>{
+ const {peer,world,session}=setup();let closed=false;peer.once('closed',()=>closed=true);
+ try{
+  const edge={type:'fire',id:1,tick:42,generation:2,epoch:1,button:0,pressed:true,client:'victim',position:[1,2,3],aimYaw:1,viewTick:40};
+  peer.emit('message','state',edge);assert.equal(world.sent.length,1);
+  peer.emit('message','events',edge);const message=world.sent.at(-1);assert.equal(message.client,'player');assert.equal(message.edge.aimYaw,1);assert.equal(message.edge.viewTick,40);assert.equal(message.edge.position,undefined);assert.equal(message.edge.client,undefined);
+  for(let i=2;i<=121;i++)peer.emit('message','events',{...edge,id:i});
+  assert(closed);assert.equal(world.sent.filter(m=>m.type==='fire').length,120);
+ }finally{session.close();}
+});
