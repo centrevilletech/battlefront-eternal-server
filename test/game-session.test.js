@@ -72,8 +72,8 @@ test('negotiated binary snapshots preserve compressed bytes and first-fragment m
 test('reliable actions bind identity independently of state packet sequence',()=>{
  const {peer,world,session}=setup();try{
  peer.emit('message','state',{type:'input',command:{sequence:90}});
- peer.emit('message','events',{type:'actions',client:'victim',epoch:1,id:10,tick:42,generation:1,actions:['jump'],human:[]});
- const action=world.sent.at(-1);assert.equal(action.type,'actions');assert.equal(action.client,'player');assert.equal(action.envelope.id,10);assert.deepEqual(action.envelope.actions,['jump']);
+ peer.emit('message','events',{type:'actions',client:'victim',epoch:1,id:10,tick:42,generation:1,actions:['jump']});
+ const action=world.sent.at(-1);assert.equal(action.type,'actions');assert.equal(action.client,'player');assert.equal(action.envelope.id,10);assert.deepEqual(action.envelope.actions,['jump']);assert.deepEqual(action.envelope.human,[]);
  }finally{session.close();}
 });
 

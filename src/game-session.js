@@ -52,9 +52,9 @@ export class GameSession {
     }else if(m.type==='snapshot-resync'){
       if(this.journal&&label==='events'&&this.allowResync())this.world.postMessage({type:'snapshotResync',client:this.id});
     }else if(m.type==='actions'){
-      if(label!=='events'||!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.actions)||m.actions.length>64||!Array.isArray(m.human)||m.human.length>8)return this.peer.close('invalid-actions');
+      if(label!=='events'||!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.actions)||m.actions.length>64||(m.human!==undefined&&!Array.isArray(m.human))||(m.human?.length??0)>8)return this.peer.close('invalid-actions');
       const now=Date.now();if(now-(this.actionWindow??0)>=1000){this.actionWindow=now;this.actionCount=0;}if(++this.actionCount>120)return this.peer.close('action-flood');
-      this.world.postMessage({type:'actions',client:this.id,envelope:{epoch:m.epoch,id:m.id,tick:m.tick,generation:m.generation,actions:m.actions,human:m.human}});
+      this.world.postMessage({type:'actions',client:this.id,envelope:{epoch:m.epoch,id:m.id,tick:m.tick,generation:m.generation,actions:m.actions,human:m.human??[]}});
     }else if(m.type==='fire') {
       if(label!=='events')return;
       if(!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||![0,1].includes(m.button)||typeof m.pressed!=='boolean')return this.peer.close();

@@ -19,7 +19,7 @@ try {
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
   let Journal;
   try { ({SnapshotJournal:Journal}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-journal.js')))); } catch {}
-  let journal,lastJournalId;
+  let journal,lastJournalId,eventSerial=0;
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
@@ -45,7 +45,7 @@ try {
         journal??=new Journal();
         if(lastJournalId!==group.sharedId) {
           const events=journal.push(group.buffer);lastJournalId=group.sharedId;
-          if(events.calls.length)parentPort.postMessage({type:'journalEvents',sharedId:`events:${events.epoch}:${events.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...events})).buffer,recipients:journalRecipients});
+          for(let offset=0;offset<events.calls.length;offset+=256){const batch={...events,id:++eventSerial,calls:events.calls.slice(offset,offset+256)};parentPort.postMessage({type:'journalEvents',sharedId:`events:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...batch})).buffer,recipients:journalRecipients});}
         }
         const encoded=new Map();
         for(const recipient of journalRecipients) {
