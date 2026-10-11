@@ -2,6 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { Worker } from "node:worker_threads";
@@ -35,7 +36,7 @@ async function menu() {
   try {
     for (;;) {
       console.log(
-        "\nBattlefront Eternal server\n1  Server name\n2  Installed engine and imported game data\n3  Playlist\n4  Online notice and master\n5  Relay policy\n6  Global ban preference\n7  Show configuration\n0  Save and exit",
+        "\nBattlefront Eternal server\n1  Server name\n2  Installed engine and imported game data\n3  Playlist\n4  Online notice and master\n5  Relay policy\n6  Global ban preference\n7  Show configuration\n8  Import owned gameplay bundle\n0  Save and exit",
       );
       const choice = await io.question("Choice: ");
       if (choice === "0") {
@@ -83,6 +84,17 @@ async function menu() {
         config.honorGlobalBans =
           (await io.question("Honor global bans? yes/no: ")) === "yes";
       else if (choice === "7") console.log(JSON.stringify(config, null, 2));
+      else if (choice === "8") {
+        if (!config.engine) { console.log('Set the installed engine directory first.'); continue; }
+        const bundle = await io.question('Owned gameplay bundle directory: ');
+        const destination = await io.question('New imported data directory: ');
+        if (!bundle.trim() || !destination.trim()) { console.log('Both paths are required.'); continue; }
+        try {
+          const { importBundle } = await import(pathToFileURL(join(config.engine, 'src/runtime/gameplay-bundle-node.js')));
+          const result = await importBundle({ bundle:resolve(bundle), destination:resolve(destination) });
+          config.data = result.destination; console.log('Gameplay bundle verified and imported.');
+        } catch(e) { console.error('Import failed:', e.message); }
+      }
       save();
     }
   } finally {
@@ -115,9 +127,12 @@ async function serve() {
     );
   });
   server.listen(Number(process.env.PORT ?? 18450), "127.0.0.1");
-  if (config.engine && config.data) {
-    const [map, side] = config.rotation[0].replace(/^swbf1\//, "").split(":");
-    if (config.rotation[0].startsWith("swbf2/"))
+  let rotationIndex = 0, rotating = false;
+  async function launch() {
+    error = null; tick = 0;
+    const mission = config.rotation[rotationIndex];
+    const [map, side] = mission.replace(/^swbf1\//, "").split(":");
+    if (mission.startsWith("swbf2/"))
       throw Error("BF2 simulation is not implemented");
     const query = `?map=${map}&side=${side}&ai=classic&seed=1`;
     world = new Worker(new URL("./world-worker.js", import.meta.url), {
@@ -133,17 +148,29 @@ async function serve() {
       if (m.type === "ready") {
         status = "running";
         config.content = m.content;
+        const activeConfig = { ...config, rotation:[...config.rotation.slice(rotationIndex), ...config.rotation.slice(0,rotationIndex)] };
         world.postMessage({ type: "start" });
         const keys = loadIdentity(join(directory, 'identity.json'));
-        try { local = await startLocalServer({ config, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
+        try { local = await startLocalServer({ config:activeConfig, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
         catch(e) { error=e.message; console.error('LAN listener:',e.message); }
         if (config.onlineNoticeAccepted) {
           try {
-            online = new OnlineServer({ config, directory, world, query });
+            online = new OnlineServer({ config:activeConfig, directory, world, query });
             online.on('fault', message => console.error('Online:', message));
             await online.start(); console.log('Online server identity:', online.id);
           } catch (e) { error = e.message; console.error('Online registration:', e.message); }
         }
+      } else if (m.type === "finished" && !rotating) {
+        rotating = true;
+        rotationIndex = (rotationIndex + 1) % config.rotation.length;
+        const [nextMap,nextSide] = config.rotation[rotationIndex].replace(/^swbf1\//,'').split(':');
+        const match = { query:`?map=${nextMap}&side=${nextSide}&ai=classic&seed=1`, delayMs:8000 };
+        online?.match(match); local?.match(match);
+        setTimeout(async () => {
+          try { await online?.close(); await local?.close(); await world.terminate(); online=null; local=null; await launch(); }
+          catch(e) { status='fault'; error=e.message; console.error(e); }
+          finally { rotating=false; }
+        }, 500);
       } else if (m.type === "tick") tick = m.tick;
       else if (m.type === "error") {
         status = "fault";
@@ -156,6 +183,7 @@ async function serve() {
       error = e.message;
     });
   }
+  if (config.engine && config.data) await launch();
   console.log("bfeserver service started; control menu: bfeserver");
   for (const s of ["SIGINT", "SIGTERM"])
     process.on(s, async () => {

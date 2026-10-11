@@ -28,9 +28,11 @@ export async function startLocalServer({ config, identity, certificate, world, q
     peer.once('closed',()=>{clearTimeout(timeout);peers.delete(peer);socket.close();});
     socket.on('error',()=>peer.close());socket.once('close',()=>{sockets.delete(socket);if(!peer.authenticated)peer.close();});
   });
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(config.gamePort ?? 18451,config.bind ?? '0.0.0.0',resolve);});
+  const listen = address => new Promise((resolve,reject)=>{const failed=error=>reject(error);server.once('error',failed);server.listen(config.gamePort ?? 18451,address,()=>{server.off('error',failed);resolve();});});
+  try { await listen(config.bind ?? '::'); }
+  catch(error) { if(config.bind || !['EAFNOSUPPORT','EADDRNOTAVAIL'].includes(error.code))throw error; await listen('0.0.0.0'); }
   let discovery;
   try { if(config.discovery !== false) discovery=await startLanDiscovery({port:config.discoveryPort ?? 18452,getInfo:info}); }
   catch(error) { console.error('LAN discovery unavailable:',error.message); }
-  return { info, async close(){await discovery?.close();for(const p of peers)p.close();for(const s of sockets)s.terminate();websocket.close();await new Promise(r=>server.close(r));} };
+  return { info, match(value){for(const peer of peers)peer.send('events',{type:'match',...value});}, async close(){await discovery?.close();for(const p of peers)p.close();for(const s of sockets)s.terminate();websocket.close();await new Promise(r=>server.close(r));} };
 }

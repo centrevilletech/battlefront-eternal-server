@@ -21,7 +21,11 @@ try {
     }
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
-  const step = () => { const tick = world.step(); if (tick % 3 === 0) publish(); };
+  let ended = false;
+  const step = () => {
+    const tick = world.step(); if (tick % 3 === 0) publish();
+    if (game.battle.finished && !ended) { ended = true; parentPort.postMessage({ type: 'finished', tick }); }
+  };
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
     try {
@@ -31,7 +35,14 @@ try {
         clients.set(m.client, { started: false });
         parentPort.postMessage({ type: 'joined', client: m.client, player: world.player(m.client), tick: game.worldClock.tick });
       } else if (m.type === 'leave') { clients.delete(m.client); world.removePlayer(m.client); }
-      else if (m.type === 'inputs') {
+      else if (m.type === 'chat') {
+        const sender = world.player(m.client);
+        if (!sender || !clients.get(m.client)?.started) return;
+        for (const [client, state] of clients) {
+          if (!state.started || (m.team && world.player(client)?.team !== sender.team)) continue;
+          parentPort.postMessage({ type:'chat',client,text:m.text,team:m.team,playerId:sender.unitId,sender:`Player ${sender.unitId}` });
+        }
+      } else if (m.type === 'inputs') {
         if (!clients.get(m.client)?.started) return;
         for (const command of m.commands.slice(0,32)) world.input(m.client, command);
       } else if (m.type === 'resync') clients.get(m.client) && (clients.get(m.client).keyframe = true);
