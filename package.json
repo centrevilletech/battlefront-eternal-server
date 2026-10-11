@@ -1,0 +1,21 @@
+{
+  "name": "battlefront-eternal-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "node src/main.js --serve"
+  },
+  "dependencies": {
+    "node-datachannel": "0.33.4",
+    "ws": "8.22.0"
+  },
+  "bin": {
+    "bfeserver": "src/main.js"
+  }
+}

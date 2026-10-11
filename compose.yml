@@ -1,0 +1,21 @@
+services:
+  server:
+    build: .
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1
+    volumes:
+      - state:/data
+      # Mount an operator-owned engine checkout and imported game data before play.
+      # - /path/to/engine:/engine:ro
+      # - /path/to/imported-data:/game-data:ro
+    tmpfs: [/tmp]
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
+volumes:
+  state:

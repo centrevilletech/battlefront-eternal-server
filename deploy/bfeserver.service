@@ -1,0 +1,16 @@
+[Unit]
+Description=Battlefront Eternal dedicated server
+After=network-online.target
+[Service]
+User=bfeserver
+Group=bfeserver
+Environment=BFE_STATE_DIR=/var/lib/bfeserver
+ExecStart=/opt/bfeserver/node/bin/node /opt/bfeserver/src/main.js --serve
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bfeserver
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target
