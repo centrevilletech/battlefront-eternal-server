@@ -36,7 +36,7 @@ try{
  const pump=()=>{pumping=false;while(queue.length&&queue[0].due<=Date.now()){const item=queue[0];if(!send(item.label,item.message))break;if(item.label==='bulk')wire+=item.size;queuedBytes-=item.size;queue.shift();}if(queue.length&&!host.closed){pumping=true;later(pump,Math.max(5,queue[0].due-Date.now()));}};
  host.send=(label,message)=>{const size=Buffer.byteLength(JSON.stringify(message));if(queuedBytes+size>256*1024)return false;due=Math.max(due,Date.now()+latency+random()*jitter)+(label==='bulk'&&random()<loss?retryMs:0);queue.push({label,message,size,due});queuedBytes+=size;if(!pumping){pumping=true;later(pump,Math.max(0,due-Date.now()));}return true;};
  host.backlog=()=>queuedBytes;host.on('signal',signal=>child.send({type:'signal',index,signal}));host.once('ready',r=>sessions.push(new GameSession(host,world,r.id,{})));
- child.send({type:'create',index,root,directory,content:ready.content,portable:portableEvery>0&&index%portableEvery===0,loss,jitter,latency});
+ child.send({type:'create',index,root,directory,content:ready.content,portable:portableEvery>0&&index%portableEvery===0,loss,jitter,latency,compact:arg('compact',1)!==0});
  await wait(()=>host.welcomed,'peer '+index);
  }
  world.postMessage({type:'start'});sampler=setInterval(()=>{children.forEach(c=>c.send({type:'sample'}));backlogs.push(...hosts.map(h=>h.backlog()));},250);

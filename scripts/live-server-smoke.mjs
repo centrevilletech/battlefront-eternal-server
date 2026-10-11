@@ -13,6 +13,7 @@ const serverId=process.argv[2];
 if(!/^[a-f0-9]{64}$/.test(serverId??''))throw Error('Pass the directory server identity as the first argument');
 const root=resolve(process.env.BFE_ENGINE_DIR??'../battlefront-eternal');
 const {contentHash}=await import(pathToFileURL(join(root,'src/runtime/content-hash.js')));
+const {expandMetadata}=await import(pathToFileURL(join(root,'src/runtime/shared-packet.js')));
 const {BinaryReader}=await import(pathToFileURL(join(root,'src/runtime/packet.js')));
 const masterUrl=process.env.BFE_MASTER_URL??'https://online.battlefronteternal.com';
 const directory=await mkdtemp(join(tmpdir(),'bfe-live-'));
@@ -26,11 +27,11 @@ try {
     const content=await contentHash(`?map=${map}&side=${side}`,await dataReader(resolve(process.env.BFE_DATA_DIR??'../battlefront-eternal/public')));
     assert.equal(content,listing.content,'Local gameplay content matches deployed host');
     await master.connect();
-    const peer=new Peer({name:'live-'+i,keys:master.keys,initiator:true,expectedKey:serverId,simulation:listing.simulation,content,iceServers:await master.credentials(serverId),relay:true,portable:true});
+    const peer=new Peer({name:'live-'+i,keys:master.keys,initiator:true,expectedKey:serverId,simulation:listing.simulation,content,capabilities:['compact-personal-v1'],iceServers:await master.credentials(serverId),relay:true,portable:true});
     const c={master,peer,reader:new BinaryReader(),fragments:new Map(),packets:0,sequence:0,ack:0};clients.push(c);
     peer.on('signal',s=>master.signal(serverId,s));master.on('signal',m=>peer.signal(JSON.parse(m.payload)));
     peer.on('fault',message=>console.error(message));
-    const packet=(data,metadata)=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,metadata);c.tick=p.tick;c.ack=p.ack;c.packets++;};
+    const packet=(data,metadata)=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,expandMetadata(metadata));c.tick=p.tick;c.ack=p.ack;c.packets++;};
     peer.on('message',(_,m)=>{
       if(m.type==='welcome')c.welcome=m;
       if(m.type==='ticks')for(const buffer of m.buffers)packet(buffer,m.metadata);

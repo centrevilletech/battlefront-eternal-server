@@ -10,14 +10,14 @@ const later=(fn,ms)=>{const t=setTimeout(()=>{timers.delete(t);fn();},ms);timers
 process.on('message',async m=>{
  try {
  if(m.type==='create'){
- settings=m;const {BinaryReader}=await import(pathToFileURL(join(m.root,'src/runtime/packet.js')));
- const peer=new Peer({name:'load-client-'+m.index,keys:loadIdentity(join(m.directory,'client-'+m.index)),initiator:true,simulation:'bfe-sim-2',content:m.content,portable:m.portable});
+ settings=m;const {BinaryReader}=await import(pathToFileURL(join(m.root,'src/runtime/packet.js')));const {expandMetadata}=await import(pathToFileURL(join(m.root,'src/runtime/shared-packet.js')));
+ const peer=new Peer({name:'load-client-'+m.index,keys:loadIdentity(join(m.directory,'client-'+m.index)),initiator:true,simulation:'bfe-sim-2',content:m.content,capabilities:m.compact?['compact-personal-v1']:[],portable:m.portable});
  const c={peer,index:m.index,reader:new BinaryReader(),parts:new Map(),packets:0,tick:0,ack:0,sequence:0,fireId:0,held:false,rtt:[],ackLag:[],packetGaps:[],lastPacket:0};peers.set(m.index,c);
  peer.on('signal',signal=>process.send({type:'signal',index:m.index,signal}));
  peer.once('closed',reason=>process.send({type:'peerClosed',index:m.index,reason}));
  peer.on('ping',value=>c.rtt.push(value));
  peer.on('fault',error=>process.send({type:'error',message:String(error)}));
- const packet=(data,metadata)=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,metadata);const now=performance.now();if(c.lastPacket)c.packetGaps.push(now-c.lastPacket);c.lastPacket=now;c.tick=p.tick;c.ack=p.ack;c.generation=p.generation??c.generation;c.spawn=p.personal?.spawn;c.alive=p.alive;c.className=p.playerClass;c.packets++;if(c.sequence)c.ackLag.push(Math.max(0,c.sequence-c.ack));};
+ const packet=(data,metadata)=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,expandMetadata(metadata));const now=performance.now();if(c.lastPacket)c.packetGaps.push(now-c.lastPacket);c.lastPacket=now;c.tick=p.tick;c.ack=p.ack;c.generation=p.generation??c.generation;c.spawn=p.personal?.spawn;c.alive=p.alive;c.className=p.playerClass;c.packets++;if(c.sequence)c.ackLag.push(Math.max(0,c.sequence-c.ack));};
  peer.on('message',(_,v)=>{if(v.type==='welcome'){c.welcome=v;c.generation=v.generation;peer.send('events',{type:'call',id:1,method:'start'});process.send({type:'welcome',index:m.index});}else if(v.type==='reset')c.parts.clear();else if(v.type==='ticks')v.buffers.forEach(data=>packet(data,v.metadata));else if(v.type==='packet'){let p=c.parts.get(v.id);if(!p)c.parts.set(v.id,p=[]);p[v.index]=v.data;if(v.index===0)p.metadata=v.metadata;if(p.filter(Boolean).length===v.total){packet(p.join(''),p.metadata);c.parts.delete(v.id);}}});
  } else if(m.type==='signal')await peers.get(m.index).peer.signal(m.signal);
  else if(m.type==='begin'){

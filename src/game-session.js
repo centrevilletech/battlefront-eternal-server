@@ -40,6 +40,7 @@ export class GameSession {
     world.postMessage({ type: 'join', client: id, spectator: peer.spectator, compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
+    if(this.closed)return;
     if(m.type==='fire') {
       if(label!=='events')return;
       if(!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||![0,1].includes(m.button)||typeof m.pressed!=='boolean')return this.peer.close();
