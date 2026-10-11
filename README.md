@@ -26,14 +26,15 @@ lived. Server identity and DTLS certificate persist across restarts. With
 master signing key on first use and refreshes the list every two minutes.
 
 Input commands use an unordered channel. Replica deltas currently use reliable
-ordered bulk messages so a dropped update cannot corrupt the chain. Initial
-snapshots are chunked below the channel message limit and stalled clients have
+ordered bulk messages so a dropped update cannot corrupt the chain. The simulation runs at 60 Hz; compressed replicas are sent at 20 Hz, preserving
+transient calls between snapshots. Initial snapshots are chunked below the channel message limit and stalled clients have
 a bounded backlog. This is correctness-first transport; full-match bandwidth
 and performance qualification remain open.
 
 `scripts/world-peers-smoke.mjs` runs two authenticated clients against the real
 Theed simulation and checks separate actor identities and streamed snapshots.
-It requires locally imported data. `scripts/relay-smoke.mjs` checks the deployed
+It requires locally imported data. Add `--relay` to verify the same two-player
+gameplay through the public master and Aldine relay. `scripts/relay-smoke.mjs` checks the deployed
 relay over UDP, TCP, TLS and IPv4/IPv6 combinations. `scripts/signaling-smoke.mjs`
 checks public master rendezvous. Their temporary directory listings are removed.
 

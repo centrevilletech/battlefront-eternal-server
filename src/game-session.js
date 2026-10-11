@@ -22,7 +22,7 @@ export class GameSession {
       if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
       this.world.postMessage({ type: 'inputs', client: this.id, commands });
     } else if (m.type === 'call' || m.type === 'rpc') {
-      if (!Number.isSafeInteger(m.id) || !['init', 'start', 'suspend', 'inspect', 'worldState', 'resync'].includes(m.method)) {
+      if (!Number.isSafeInteger(m.id) || !['init', 'start', 'suspend', 'inspect', 'resync'].includes(m.method)) {
         this.peer.send('events', { type: 'reply', id: m.id, error: 'Unsupported operation' }); return;
       }
       this.world.postMessage({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });

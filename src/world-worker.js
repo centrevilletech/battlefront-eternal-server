@@ -18,7 +18,8 @@ try {
       if (buffer) parentPort.postMessage({ type: 'packet', client, buffer }, [buffer]);
     }
   };
-  const step = () => { world.step(); publish(); };
+  // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
+  const step = () => { const tick = world.step(); if (tick % 3 === 0) publish(); };
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation });
   parentPort.on('message', async m => {
     try {

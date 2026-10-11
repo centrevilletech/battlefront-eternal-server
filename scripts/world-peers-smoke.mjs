@@ -44,5 +44,5 @@ try {
   }
   for(const c of clients){const a=first.units.find(u=>u[0]===c.w.playerId),b=last.units.find(u=>u[0]===c.w.playerId);assert(Math.hypot(b[4]-a[4],b[6]-a[6])>1,'player moves independently');}
   assert(clients.every(c=>c.packets.length>10),'both peers receive authoritative packets');
-  console.log(JSON.stringify({ok:true,paths:clients.map(c=>c.peer.path()),relay,players:clients.map(c=>c.w.playerId),packets:clients.map(c=>c.packets.length),ticks:90,wireBytes:clients.map(c=>c.packets.reduce((sum,m)=>sum+JSON.stringify(m).length,0))}));
+  console.log(JSON.stringify({steadyBytesPerSecond:clients.map(c=>Math.round(c.packets.slice(1).reduce((sum,m)=>sum+JSON.stringify(m).length,0)/(89/60))),ok:true,paths:clients.map(c=>c.peer.path()),relay,players:clients.map(c=>c.w.playerId),packets:clients.map(c=>c.packets.length),ticks:90,wireBytes:clients.map(c=>c.packets.reduce((sum,m)=>sum+JSON.stringify(m).length,0))}));
 } finally {clearTimeout(timer);for(const p of peers)p.close();for(const m of masters)m.close();await online?.close();await worker.terminate();rtc.cleanup();await rm(directory,{recursive:true,force:true});}
