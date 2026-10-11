@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { parentPort, workerData } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
@@ -21,10 +22,12 @@ try {
     }
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
+  const matchId = randomUUID();
+  const report = () => parentPort.postMessage({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
   let ended = false;
   const step = () => {
-    const tick = world.step(); if (tick % 3 === 0) publish();
-    if (game.battle.finished && !ended) { ended = true; parentPort.postMessage({ type: 'finished', tick }); }
+    const tick = world.step(); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
@@ -34,7 +37,8 @@ try {
         await world.addPlayer(m.client, { spectator: m.spectator });
         clients.set(m.client, { started: false });
         parentPort.postMessage({ type: 'joined', client: m.client, player: world.player(m.client), tick: game.worldClock.tick });
-      } else if (m.type === 'leave') { clients.delete(m.client); world.removePlayer(m.client); }
+      } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); }
+      else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
       else if (m.type === 'chat') {
         const sender = world.player(m.client);
         if (!sender || !clients.get(m.client)?.started) return;

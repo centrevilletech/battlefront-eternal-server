@@ -10,6 +10,7 @@ import http from "node:http";
 import { startLocalServer } from "./local-server.js";
 import { loadIdentity, keyId } from "./identity.js";
 import { loadCertificate } from "./certificate.js";
+import { OperatorStore, operatorHandler, operatorRequest } from "./operator.js";
 import { OnlineServer } from "./online-server.js";
 const directory = resolve(
   process.env.BFE_STATE_DIR ?? join(homedir(), ".local/share/bfeserver"),
@@ -36,7 +37,7 @@ async function menu() {
   try {
     for (;;) {
       console.log(
-        "\nBattlefront Eternal server\n1  Server name\n2  Installed engine and imported game data\n3  Playlist\n4  Online notice and master\n5  Relay policy\n6  Global ban preference\n7  Show configuration\n8  Import owned gameplay bundle\n0  Save and exit",
+        "\nBattlefront Eternal server\n1  Server name\n2  Installed engine and imported game data\n3  Playlist\n4  Online notice and master\n5  Relay policy\n6  Global ban preference\n7  Show configuration\n8  Import owned gameplay bundle\n9  Live server administration\n0  Save and exit",
       );
       const choice = await io.question("Choice: ");
       if (choice === "0") {
@@ -95,11 +96,24 @@ async function menu() {
           config.data = result.destination; console.log('Gameplay bundle verified and imported.');
         } catch(e) { console.error('Import failed:', e.message); }
       }
+      if (choice === "9") await adminMenu(io);
       save();
     }
   } finally {
     io.close();
   }
+}
+async function adminMenu(io) {
+  console.log('1  Status and players\n2  Kick player\n3  Ban identity\n4  Unban identity\n5  Player statistics\n6  Server message');
+  const choice=await io.question('Admin choice: ');
+  let request;
+  if(choice==='1')request={action:'status'};
+  else if(choice==='2')request={action:'kick',id:await io.question('Identity: ')};
+  else if(choice==='3')request={action:'ban',id:await io.question('Identity: '),hours:Number(await io.question('Hours (0 permanent): ')),reason:await io.question('Reason: ')};
+  else if(choice==='4')request={action:'unban',id:await io.question('Identity: ')};
+  else if(choice==='5')request={action:'stats',id:(await io.question('Identity (blank for recent players): '))||undefined};
+  else if(choice==='6')request={action:'message',text:await io.question('Message: ')};
+  if(request)try{console.log(JSON.stringify(await operatorRequest(directory,request),null,2));}catch(e){console.error('Administration:',e.message);}
 }
 async function serve() {
   let online = null, local = null;
@@ -107,8 +121,20 @@ async function serve() {
     status = "setup",
     tick = 0,
     error = null;
+  const operator = new OperatorStore(directory);
+  const admin = operatorHandler(directory, async command => {
+    if(command.action==='status')return {status,tick,players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
+    if(command.action==='stats')return {players:operator.stats(command.id)};
+    if(command.action==='unban'){operator.unban(command.id);return {ok:true};}
+    if(command.action==='ban')operator.ban(command.id,command.hours,command.reason);
+    else if(command.action==='kick'){if(!/^[a-f0-9]{64}$/.test(command.id??''))throw Error('Invalid identity');operator.audit('kick',command.id,command.reason);}
+    else if(command.action==='message'){if(typeof command.text!=='string'||!command.text.trim()||command.text.length>240)throw Error('Invalid message');world?.postMessage({type:'announcement',text:command.text});return {ok:true};}
+    else throw Error('Unknown operator command');
+    local?.kick(command.id);online?.kick(command.id);return {ok:true};
+  });
   // The service stays in setup mode until its engine and owned content are present.
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
+    if(await admin(req,res))return;
     if (req.url !== "/healthz") {
       res.writeHead(404);
       res.end();
@@ -151,11 +177,11 @@ async function serve() {
         const activeConfig = { ...config, rotation:[...config.rotation.slice(rotationIndex), ...config.rotation.slice(0,rotationIndex)] };
         world.postMessage({ type: "start" });
         const keys = loadIdentity(join(directory, 'identity.json'));
-        try { local = await startLocalServer({ config:activeConfig, directory, world, query, identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
+        try { local = await startLocalServer({ config:activeConfig, directory, world, query, isBanned:id=>operator.banned(id), identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
         catch(e) { error=e.message; console.error('LAN listener:',e.message); }
         if (config.onlineNoticeAccepted) {
           try {
-            online = new OnlineServer({ config:activeConfig, directory, world, query });
+            online = new OnlineServer({ config:activeConfig, directory, world, query, isBanned:id=>operator.banned(id) });
             online.on('fault', message => console.error('Online:', message));
             await online.start(); console.log('Online server identity:', online.id);
           } catch (e) { error = e.message; console.error('Online registration:', e.message); }
@@ -171,7 +197,8 @@ async function serve() {
           catch(e) { status='fault'; error=e.message; console.error(e); }
           finally { rotating=false; }
         }, 500);
-      } else if (m.type === "tick") tick = m.tick;
+      } else if (m.type === "scores") operator.scores(m.match,m.players);
+      else if (m.type === "tick") tick = m.tick;
       else if (m.type === "error") {
         status = "fault";
         error = m.message;
@@ -190,10 +217,11 @@ async function serve() {
       await online?.close();
       await local?.close();
       world?.terminate();
-      server.close(() => process.exit(0));
+      server.close(() => {operator.close();process.exit(0);});
     });
 }
-if (process.argv.includes("--serve")) await serve();
+if (process.argv.includes("--admin")) {const offset=process.argv.indexOf("--admin");console.log(JSON.stringify(await operatorRequest(directory,JSON.parse(process.argv[offset+1]??'{"action":"status"}')),null,2));}
+else if (process.argv.includes("--serve")) await serve();
 else if (process.argv.includes("--version"))
   console.log("bfeserver 0.1.0 (pre-release)");
 else await menu();

@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Peer } from './peer.js';
 import { GameSession } from './game-session.js';
 import { startLanDiscovery } from './lan.js';
-export async function startLocalServer({ config, identity, certificate, world, query }) {
+export async function startLocalServer({ config, identity, certificate, world, query, isBanned = () => false }) {
   const peers = new Set(), sockets = new Set();
   const info = () => ({ id: identity.id, name: config.name, protocol: 1,
     simulation: config.simulation ?? 'bfe-sim-1', content: config.content ?? 'bfe-content-1',
@@ -24,7 +24,7 @@ export async function startLocalServer({ config, identity, certificate, world, q
     peer.on('signal',s=>{if(socket.readyState===WebSocket.OPEN&&socket.bufferedAmount<65536)socket.send(JSON.stringify(s));});
     socket.on('message',raw=>{try{if(++count>180)throw Error('signaling limit');peer.signal(JSON.parse(raw));}catch{peer.close();}});
     peer.on('fault',()=>peer.close());
-    peer.once('ready',r=>{clearTimeout(timeout);new GameSession(peer,world,r.id,{...info()});});
+    peer.once('ready',r=>{clearTimeout(timeout);peer.identity=r.id;if(isBanned(r.id)){peer.close();return;}new GameSession(peer,world,r.id,{...info()});});
     peer.once('closed',()=>{clearTimeout(timeout);peers.delete(peer);socket.close();});
     socket.on('error',()=>peer.close());socket.once('close',()=>{sockets.delete(socket);if(!peer.authenticated)peer.close();});
   });
@@ -34,5 +34,5 @@ export async function startLocalServer({ config, identity, certificate, world, q
   let discovery;
   try { if(config.discovery !== false) discovery=await startLanDiscovery({port:config.discoveryPort ?? 18452,getInfo:info}); }
   catch(error) { console.error('LAN discovery unavailable:',error.message); }
-  return { info, match(value){for(const peer of peers)peer.send('events',{type:'match',...value});}, async close(){await discovery?.close();for(const p of peers)p.close();for(const s of sockets)s.terminate();websocket.close();await new Promise(r=>server.close(r));} };
+  return { info, players:()=>[...peers].filter(p=>p.authenticated).map(p=>p.identity), kick(id){for(const peer of peers)if(peer.identity===id)peer.close();}, match(value){for(const peer of peers)peer.send('events',{type:'match',...value});}, async close(){await discovery?.close();for(const p of peers)p.close();for(const s of sockets)s.terminate();websocket.close();await new Promise(r=>server.close(r));} };
 }

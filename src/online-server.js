@@ -7,8 +7,8 @@ import { Peer } from './peer.js';
 import { BanCache } from './bans.js';
 import { GameSession } from './game-session.js';
 export class OnlineServer extends EventEmitter {
-  constructor({ config, directory, world, query }) {
-    super(); this.config = config; this.world = world; this.query = query; this.peers = new Map(); this.pending = new Map();
+  constructor({ config, directory, world, query, isBanned = () => false }) {
+    super(); this.isBanned=isBanned; this.config = config; this.world = world; this.query = query; this.peers = new Map(); this.pending = new Map();
     this.keys = loadIdentity(join(directory, 'identity.json')); this.id = keyId(this.keys.publicKey);
     this.certificate = loadCertificate(directory);
     this.master = new MasterClient({ url: config.master, keys: this.keys, noticeAccepted: config.onlineNoticeAccepted });
@@ -39,7 +39,7 @@ export class OnlineServer extends EventEmitter {
   }
   async signal(m) {
     if (!/^[a-f0-9]{64}$/.test(m.from) || typeof m.payload !== 'string') return;
-    if (this.config.honorGlobalBans && this.bans.contains(m.from)) return;
+    if (this.isBanned(m.from) || (this.config.honorGlobalBans && this.bans.contains(m.from))) return;
     const signal = JSON.parse(m.payload);
     let peer = this.peers.get(m.from);
     if (!peer) {
@@ -59,14 +59,16 @@ export class OnlineServer extends EventEmitter {
       peer.on('signal', s => this.master.signal(m.from, s));
       peer.once('closed', () => this.peers.delete(m.from));
       peer.on('fault', error => this.emit('fault', error));
-      peer.once('ready', () => new GameSession(peer, this.world, m.from, {
+      peer.once('ready', () => { if(this.isBanned(m.from)){peer.close();return;} new GameSession(peer, this.world, m.from, {
         query: this.query, protocol: 1, simulation: this.simulation, content: this.content, serverId: this.id,
-      }));
+      }); });
       peer.signal(signal);
       for (const candidate of this.pending.get(m.from) ?? []) peer.signal(candidate);
       this.pending.delete(m.from);
     } else peer.signal(signal);
   }
+  kick(id) { this.peers.get(id)?.close(); }
+  players() { return [...this.peers].filter(([,peer])=>peer.authenticated).map(([id])=>id); }
   match(value) { for (const peer of this.peers.values()) peer.send('events', { type:'match', ...value }); }
   async close() {
     this.closed = true; clearInterval(this.heartbeat); clearInterval(this.banTimer); clearTimeout(this.retry);

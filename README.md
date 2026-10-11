@@ -46,8 +46,15 @@ required by the server.
 Finished matches advance the configured playlist and reload connected clients
 into a new authoritative world. The same persistent server identity is retained.
 
-Remaining release gates include complete operator kick/ban/stats
-controls, Steam acquisition, signed installers/updates, vehicle and late-join
+The setup menu's live administration option shows authenticated player identities,
+kicks players, sets local expiring or permanent bans, queries persisted match
+statistics and sends server announcements. These controls use a loopback-only
+HTTP endpoint and a local `operator-token` file readable only by its owner.
+`bfeserver --admin '{"action":"status"}'` also works for local automation.
+SQLite stores cumulative match checkpoints under authenticated identities; repeated
+checkpoints do not duplicate scores. No player IP addresses are stored there.
+
+Remaining release gates include Steam acquisition, signed installers/updates, vehicle and late-join
 qualification, and full-match testing under latency, packet loss and cellular
 networks. Do not treat workstation relay tests as Starlink or load qualification.
 
