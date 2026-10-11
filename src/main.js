@@ -116,14 +116,16 @@ async function adminMenu(io) {
   if(request)try{console.log(JSON.stringify(await operatorRequest(directory,request),null,2));}catch(e){console.error('Administration:',e.message);}
 }
 async function serve() {
-  let online = null, local = null;
+  let online = null, local = null, stopping = false, rotationTimer = null;
+  const startedAt = Date.now();
   let world = null,
     status = "setup",
     tick = 0,
     error = null;
   const operator = new OperatorStore(directory);
   const admin = operatorHandler(directory, async command => {
-    if(command.action==='status')return {status,tick,bans:operator.bans(),players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
+    if(command.action==='status')return {status,tick,pid:process.pid,startedAt,bans:operator.bans(),players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
+    if(command.action==='stop'){setTimeout(()=>shutdown(),50);return {ok:true};}
     if(command.action==='stats')return {players:operator.stats(command.id)};
     if(command.action==='unban'){operator.unban(command.id);return {ok:true};}
     if(command.action==='ban')operator.ban(command.id,command.hours,command.reason);
@@ -192,7 +194,7 @@ async function serve() {
         const [nextMap,nextSide] = config.rotation[rotationIndex].replace(/^swbf1\//,'').split(':');
         const match = { query:`?map=${nextMap}&side=${nextSide}&ai=classic&seed=1`, delayMs:8000 };
         online?.match(match); local?.match(match);
-        setTimeout(async () => {
+        rotationTimer = setTimeout(async () => {
           try { await online?.close(); await local?.close(); await world.terminate(); online=null; local=null; await launch(); }
           catch(e) { status='fault'; error=e.message; console.error(e); }
           finally { rotating=false; }
@@ -212,13 +214,12 @@ async function serve() {
   }
   if (config.engine && config.data) await launch();
   console.log("bfeserver service started; control menu: bfeserver");
-  for (const s of ["SIGINT", "SIGTERM"])
-    process.on(s, async () => {
-      await online?.close();
-      await local?.close();
-      world?.terminate();
-      server.close(() => {operator.close();process.exit(0);});
-    });
+  async function shutdown() {
+    if(stopping)return; stopping=true;clearTimeout(rotationTimer);
+    await online?.close(); await local?.close(); await world?.terminate();
+    server.close(() => {operator.close();process.exit(0);});
+  }
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal,shutdown);
 }
 if (process.argv.includes("--admin")) {const offset=process.argv.indexOf("--admin");console.log(JSON.stringify(await operatorRequest(directory,JSON.parse(process.argv[offset+1]??'{"action":"status"}')),null,2));}
 else if (process.argv.includes("--serve")) await serve();
