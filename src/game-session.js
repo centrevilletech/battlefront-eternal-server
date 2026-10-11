@@ -1,20 +1,38 @@
-import { deflateSync } from 'node:zlib';
+import { deflate } from 'node:zlib';
+const sharedCompression = new WeakMap();
+export const compressionStats = { calls:0, durations:[] };
+function compress(world, buffer, sharedId) {
+  let cache=sharedCompression.get(world);
+  if(!cache)sharedCompression.set(world,cache=new Map());
+  if(sharedId!==undefined && cache.has(sharedId))return cache.get(sharedId);
+  const begun=performance.now(); compressionStats.calls++;
+  const promise=new Promise((resolve,reject)=>deflate(Buffer.from(buffer),{level:3},(error,result)=>{
+    compressionStats.durations.push(performance.now()-begun);if(compressionStats.durations.length>4096)compressionStats.durations.shift();
+    if(error)reject(error);else resolve(result.toString('base64'));
+  }));
+  if(sharedId!==undefined){cache.set(sharedId,promise);while(cache.size>4)cache.delete(cache.keys().next().value);}
+  return promise;
+}
 // Application protocol above authenticated WebRTC. Reliable packets preserve the
 // existing engine delta chain; inputs use the unordered state channel.
 export class GameSession {
   constructor(peer, world, id, welcome) {
-    this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false;
+    this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;
     this.listener = (m) => {
-      if (m.client !== id) return;
+      const recipient = m.recipients?.find(value=>value.client===id);
+      if (m.client !== id && !recipient) return;
+      if(recipient)m={...m,...recipient};
       if (m.type === 'packet') {
         if (this.awaitKeyframe && !m.keyframe) return;
         if (m.keyframe) this.awaitKeyframe = false;
-        this.packet(m.buffer);
+        this.packet(m.buffer,m.metadata,m.sharedId);
       }
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
+      else if (m.type === 'fireAck') peer.send('events',m);
       else if (m.type === 'chat') peer.send('events', m);
       else if (m.type === 'reply') { peer.send('events', m); if(m.error && m.id === undefined)peer.close(); }
     };
+    world.setMaxListeners(Math.max(world.getMaxListeners(),256));
     world.on('message', this.listener);
     peer.on('message', (label, m) => this.message(label, m));
     peer.once('closed', () => this.close());
@@ -22,7 +40,15 @@ export class GameSession {
     world.postMessage({ type: 'join', client: id, spectator: peer.spectator });
   }
   message(label, m) {
-    if (m.type === 'chat') {
+    if(m.type==='fire') {
+      if(label!=='events')return;
+      if(!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||![0,1].includes(m.button)||typeof m.pressed!=='boolean')return this.peer.close();
+      const now=Date.now();if(now-(this.fireWindow??0)>=1000){this.fireWindow=now;this.fireCount=0;}
+      if(++this.fireCount>120)return this.peer.close();
+      const edge={id:m.id,tick:m.tick,generation:m.generation,epoch:m.epoch,button:m.button,pressed:m.pressed};
+      for(const key of ['aimYaw','aimPitch','viewTick'])if(m[key]!==undefined)edge[key]=m[key];
+      this.world.postMessage({type:'fire',client:this.id,edge});
+    } else if (m.type === 'chat') {
       if (label !== 'events' || typeof m.text !== 'string' || m.text.length > 240) return;
       const now = Date.now();
       this.chatTimes = (this.chatTimes ?? []).filter(time => now-time < 5000);
@@ -42,18 +68,35 @@ export class GameSession {
     } else if (m.type === 'resync') this.world.postMessage({ type: 'resync', client: this.id });
   }
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
-  packet(buffer) {
-    const data = deflateSync(Buffer.from(buffer), { level: 3 }).toString('base64');
-    if (data.length > 2 * 1024 * 1024 || this.bytes + data.length > 4 * 1024 * 1024) return this.peer.close();
-    const id = ++this.serial, total = Math.ceil(data.length / 20000);
-    if (total === 1) this.enqueue({ type: 'ticks', encoding: 'deflate', buffers: [data] });
-    else for (let index = 0; index < total; index++) this.enqueue({ type: 'packet', encoding: 'deflate', id, index, total, data: data.slice(index * 20000, (index + 1) * 20000) });
-    this.bytes += data.length;
-    this.flush();
+  packet(buffer, metadata, sharedId) {
+    if(this.closed)return;
+    if(buffer.byteLength>2*1024*1024 || this.rawBytes+this.bytes+buffer.byteLength>4*1024*1024)return this.peer.close();
+    const promise=compress(this.world,buffer,sharedId);
+    promise.catch(()=>{});
+    this.pending.push({promise,metadata,bytes:buffer.byteLength,queuedAt:performance.now(),epoch:this.compressionEpoch});
+    this.rawBytes+=buffer.byteLength;
+    this.drain();
+  }
+  async drain() {
+    if(this.draining)return; this.draining=true;
+    try {
+      while(this.pending.length && !this.closed) {
+        const item=this.pending.shift();this.inflight=item;
+        const data=await item.promise;
+        if(this.closed || item.epoch!==this.compressionEpoch)continue;
+        this.rawBytes-=item.bytes;
+        if(this.bytes+data.length>4*1024*1024){this.peer.close();break;}
+        const id=++this.serial,total=Math.ceil(data.length/20000),extra=item.metadata?{metadata:item.metadata}:{};
+        if(total===1)this.enqueue({type:'ticks',encoding:'deflate',buffers:[data],...extra});
+        else for(let index=0;index<total;index++)this.enqueue({type:'packet',encoding:'deflate',id,index,total,data:data.slice(index*20000,(index+1)*20000),...(index===0?extra:{})});
+        this.bytes+=data.length;this.inflight=null;this.flush();
+      }
+    } catch { this.peer.close(); }
+    finally {this.draining=false;this.inflight=null;}
   }
   flush() {
-    if (this.queue.length && performance.now() - this.queue[0].queuedAt > 2000) {
-      this.queue.length = 0; this.bytes = 0; this.awaitKeyframe = true;
+    if (performance.now() - Math.min(this.queue[0]?.queuedAt??Infinity,this.pending[0]?.queuedAt??Infinity,this.inflight?.queuedAt??Infinity) > 2000) {
+      this.queue.length = 0; this.pending.length=0; this.inflight=null; this.rawBytes=0; this.compressionEpoch++; this.bytes = 0; this.awaitKeyframe = true;
       this.enqueue({type:'reset'});
       this.world.postMessage({type:'resync',client:this.id});
     }
@@ -65,6 +108,7 @@ export class GameSession {
     }
   }
   close() {
+    if(this.closed)return;this.closed=true;this.compressionEpoch++;this.pending.length=0;this.rawBytes=0;
     clearInterval(this.timer); this.world.off('message', this.listener);
     this.world.postMessage({ type: 'leave', client: this.id }); this.queue.length = 0;
   }

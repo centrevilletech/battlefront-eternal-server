@@ -13,14 +13,14 @@ export class OnlineServer extends EventEmitter {
     this.certificate = loadCertificate(directory);
     this.master = new MasterClient({ url: config.master, keys: this.keys, noticeAccepted: config.onlineNoticeAccepted });
     this.bans = new BanCache(this.master, join(directory, 'master-ban-key'));
-    this.simulation = config.simulation ?? 'bfe-sim-1'; this.content = config.content ?? 'bfe-content-1';
+    this.simulation = config.simulation ?? 'bfe-sim-2'; this.content = config.content ?? 'bfe-content-1';
     this.master.on('signal', m => this.signal(m).catch(e => this.emit('fault', e.message)));
     this.master.on('disconnected', () => { if (!this.closed) this.reconnect(); });
   }
   listing() {
     return { name: this.config.name, protocol: 1, simulation: this.simulation, content: this.content,
       rotation: this.config.rotation, players: [...this.peers.values()].filter(p => p.authenticated).length,
-      maxPlayers: this.config.maxPlayers ?? 32, relayPolicy: this.config.relayPolicy,
+      maxPlayers: this.config.maxPlayers ?? 64, relayPolicy: this.config.relayPolicy,
       endpoints: [], fingerprint: this.certificate.fingerprint };
   }
   async start() {
@@ -46,7 +46,7 @@ export class OnlineServer extends EventEmitter {
       if (signal.type !== 'offer') {
         const queue = this.pending.get(m.from); if (queue && queue.length < 32) queue.push(signal); return;
       }
-      if (this.peers.size + this.pending.size >= (this.config.maxPlayers ?? 32)) return;
+      if (this.peers.size + this.pending.size >= (this.config.maxPlayers ?? 64)) return;
       if (this.pending.has(m.from)) return;
       this.pending.set(m.from, []);
       let iceServers = [];

@@ -12,33 +12,44 @@ try {
   const { contentHash } = await import(pathToFileURL(resolve(root, 'src/runtime/content-hash.js')));
   const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
-  const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 32 });
+  const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
+  const measurements = {sim:[],encode:[],total:[],droppedTicks:0};
+  const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
   const publish = () => {
+    const begun=performance.now();
+    const groups=new Map();
     for (const [client, state] of clients) if (state.started) {
-      const keyframe = Boolean(state.keyframe);
-      const buffer = world.snapshot(client, { keyframe });
-      state.keyframe = false;
-      if (buffer) parentPort.postMessage({ type: 'packet', client, buffer, keyframe }, [buffer]);
+      const keyframe=Boolean(state.keyframe), packet=world.snapshot(client,{keyframe,sharedPacket:true});
+      state.keyframe=false;if(!packet)continue;
+      if(packet instanceof ArrayBuffer){parentPort.postMessage({type:'packet',client,buffer:packet,keyframe},[packet]);continue;}
+      let group=groups.get(packet.sharedId);
+      if(!group)groups.set(packet.sharedId,group={type:'packet',sharedId:packet.sharedId,buffer:packet.buffer.slice(0),recipients:[]});
+      group.recipients.push({client,keyframe,metadata:packet.metadata});
     }
+    for(const group of groups.values())parentPort.postMessage(group,[group.buffer]);
+    measure('encode',performance.now()-begun);
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
   const matchId = randomUUID();
   const report = () => parentPort.postMessage({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].filter(p=>!p.spectator).map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
   let ended = false;
   const step = () => {
-    const tick = world.step(); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    const begun=performance.now(), tick = world.step(); measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
     try {
-      if (m.type === 'join') {
+      if (m.type === 'metrics') { parentPort.postMessage({type:'metrics',...measurements,tick:game.worldClock.tick,humans:world.players.size,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
+      else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
-        await world.addPlayer(m.client, { spectator: m.spectator });
+        await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true });
         clients.set(m.client, { started: false });
         parentPort.postMessage({ type: 'joined', client: m.client, player: world.player(m.client), tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); }
+      else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
       else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
       else if (m.type === 'chat') {
         const sender = world.player(m.client);
@@ -57,7 +68,7 @@ try {
         let result = { epoch: 1, tick: game.worldClock.tick };
         if (m.method === 'init') result = { ...result, type: 'ready', generation: player.generation, playerId: player.unitId, shared: false };
         else if (m.method === 'start') { clients.get(m.client).started = true; clients.get(m.client) && (clients.get(m.client).keyframe = true); result.type = 'started'; }
-        else if (m.method === 'suspend') { clients.get(m.client).started = false; result.type = 'suspended'; }
+        else if (m.method === 'suspend') { clients.get(m.client).started = false; world.clearInput?.(m.client); result.type = 'suspended'; }
         else if (m.method === 'resync') { clients.get(m.client) && (clients.get(m.client).keyframe = true); }
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
         else if (m.method === 'inspect') result = { ...result, type: 'inspection', player, players: clients.size, running: Boolean(timer) };
@@ -68,7 +79,7 @@ try {
       } else if (m.type === 'start' && !timer) {
         last = performance.now(); timer = setInterval(() => {
           try {
-            const now = performance.now(); debt = Math.min(debt + (now-last)/1000, 8/60); last = now;
+            const now = performance.now(), accumulated = debt+(now-last)/1000; measurements.droppedTicks += Math.max(0,accumulated-8/60)*60; debt = Math.min(accumulated,8/60); last = now;
             let count = 0;
             while (debt >= 1/60 && count++ < 4) { step(); debt -= 1/60; }
             if (count) parentPort.postMessage({ type: 'tick', tick: game.worldClock.tick });

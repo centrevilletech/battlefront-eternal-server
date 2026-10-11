@@ -6,9 +6,9 @@ import { startLanDiscovery } from './lan.js';
 export async function startLocalServer({ config, identity, certificate, world, query, isBanned = () => false }) {
   const peers = new Set(), sockets = new Set();
   const info = () => ({ id: identity.id, name: config.name, protocol: 1,
-    simulation: config.simulation ?? 'bfe-sim-1', content: config.content ?? 'bfe-content-1',
+    simulation: config.simulation ?? 'bfe-sim-2', content: config.content ?? 'bfe-content-1',
     rotation: config.rotation, players: [...peers].filter(p=>p.authenticated).length,
-    maxPlayers: config.maxPlayers ?? 32, relayPolicy: 'never', fingerprint: certificate.fingerprint,
+    maxPlayers: config.maxPlayers ?? 64, relayPolicy: 'never', fingerprint: certificate.fingerprint,
     query, port: config.gamePort ?? 18451 });
   const server = http.createServer((req,res) => {
     res.setHeader('access-control-allow-origin','*');
@@ -17,7 +17,7 @@ export async function startLocalServer({ config, identity, certificate, world, q
   });
   const websocket = new WebSocketServer({ server, path: '/signal', maxPayload: 32768 });
   websocket.on('connection', socket => {
-    if(sockets.size >= (config.maxPlayers ?? 32)*2) {socket.close();return;}
+    if(sockets.size >= (config.maxPlayers ?? 64)*2) {socket.close();return;}
     sockets.add(socket);
     const peer=new Peer({name:'lan-client',keys:identity.keys,simulation:info().simulation,content:info().content,portable:true,...certificate});
     peers.add(peer); let count=0; const timeout=setTimeout(()=>peer.close(),30000);

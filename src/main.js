@@ -168,7 +168,8 @@ async function serve() {
         engine: config.engine,
         data: config.data,
         query,
-        maxPlayers: config.maxPlayers ?? 32,
+        maxPlayers: config.maxPlayers ?? 64,
+        armySize:32,
       },
     });
     status = "loading";

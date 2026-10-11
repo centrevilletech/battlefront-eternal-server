@@ -30,11 +30,11 @@ try {
     const c={master,peer,reader:new BinaryReader(),fragments:new Map(),packets:0,sequence:0,ack:0};clients.push(c);
     peer.on('signal',s=>master.signal(serverId,s));master.on('signal',m=>peer.signal(JSON.parse(m.payload)));
     peer.on('fault',message=>console.error(message));
-    const packet=data=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));c.tick=p.tick;c.ack=p.ack;c.packets++;};
+    const packet=(data,metadata)=>{const bytes=inflateSync(Buffer.from(data,'base64'));const p=c.reader.read(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));Object.assign(p,metadata);c.tick=p.tick;c.ack=p.ack;c.packets++;};
     peer.on('message',(_,m)=>{
       if(m.type==='welcome')c.welcome=m;
-      if(m.type==='ticks')for(const buffer of m.buffers)packet(buffer);
-      if(m.type==='packet'){let parts=c.fragments.get(m.id);if(!parts)c.fragments.set(m.id,parts=[]);parts[m.index]=m.data;if(parts.filter(Boolean).length===m.total){packet(parts.join(''));c.fragments.delete(m.id);}}
+      if(m.type==='ticks')for(const buffer of m.buffers)packet(buffer,m.metadata);
+      if(m.type==='packet'){let parts=c.fragments.get(m.id);if(!parts)c.fragments.set(m.id,parts=[]);parts[m.index]=m.data;if(m.index===0)parts.metadata=m.metadata;if(parts.filter(Boolean).length===m.total){packet(parts.join(''),parts.metadata);c.fragments.delete(m.id);}}
     });
     await wait(()=>c.welcome,'authoritative welcome');
     assert(!peer.spectator,'Matched content joins as a player');

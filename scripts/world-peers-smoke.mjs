@@ -25,10 +25,10 @@ try {
     let master;
     if(relay) {master=new MasterClient({url:'https://online.battlefronteternal.com',noticeAccepted:true,keys});masters.push(master);await master.connect();}
     const iceServers=relay?await master.credentials(online.id):[];
-    const a=new Peer({name:'client'+i,keys,initiator:true,simulation:'bfe-sim-1',content,iceServers,relay,portable:relay,expectedKey:online?.id}); peers.push(a);
+    const a=new Peer({name:'client'+i,keys,initiator:true,simulation:'bfe-sim-2',content,iceServers,relay,portable:relay,expectedKey:online?.id}); peers.push(a);
     const welcome=new Promise(r=>a.on('message',(_,m)=>{if(m.type==='welcome')r(m);}));
     if(relay) {a.on('signal',s=>master.signal(online.id,s));master.on('signal',m=>a.signal(JSON.parse(m.payload)));}
-    else {const b=new Peer({name:'server'+i,keys:serverKeys,simulation:'bfe-sim-1',content});peers.push(b);a.on('signal',s=>b.signal(s));b.on('signal',s=>a.signal(s));b.once('ready',r=>new GameSession(b,worker,r.id,{query}));}
+    else {const b=new Peer({name:'server'+i,keys:serverKeys,simulation:'bfe-sim-2',content});peers.push(b);a.on('signal',s=>b.signal(s));b.on('signal',s=>a.signal(s));b.once('ready',r=>new GameSession(b,worker,r.id,{query}));}
     await once(a,'ready'); const w=await welcome;
     const packets=[]; a.on('message',(_,m)=>{if(m.type==='ticks'||m.type==='packet')packets.push(m);});
     clients.push({peer:a,w,packets});
