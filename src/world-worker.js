@@ -14,7 +14,7 @@ try {
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
-  const measurements = {sim:[],encode:[],total:[],droppedTicks:0};
+  const measurements = {sim:[],encode:[],total:[],droppedTicks:0,fireAccepted:0,fireRejected:0};
   const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
   const publish = () => {
     const begun=performance.now();
@@ -49,7 +49,7 @@ try {
         clients.set(m.client, { started: false });
         parentPort.postMessage({ type: 'joined', client: m.client, player: world.player(m.client), tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); }
-      else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
+      else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
       else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
       else if (m.type === 'chat') {
         const sender = world.player(m.client);
