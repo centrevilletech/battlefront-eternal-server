@@ -62,8 +62,8 @@ export class MasterClient extends EventEmitter {
     );
     return true;
   }
-  async credentials(serverId) {
-    const r = await this.request("/v1/relay-credentials", "POST", { serverId });
+  async credentials(serverId, peerId) {
+    const r = await this.request("/v1/relay-credentials", "POST", { serverId, ...(peerId ? { peerId } : {}) });
     return r.urls.map((uri) => {
       const match = uri.match(/^(turns?):([^:]+):(\d+)\?transport=(udp|tcp)$/);
       if (!match) throw Error("unsupported TURN URI");

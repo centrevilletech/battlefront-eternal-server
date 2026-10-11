@@ -50,7 +50,7 @@ export class OnlineServer extends EventEmitter {
       if (this.pending.has(m.from)) return;
       this.pending.set(m.from, []);
       let iceServers = [];
-      try { if (this.config.relayPolicy !== 'never') iceServers = await this.master.credentials(this.id); }
+      try { if (this.config.relayPolicy !== 'never') iceServers = await this.master.credentials(this.id, m.from); }
       catch (e) { if (this.config.relayPolicy === 'always') { this.pending.delete(m.from); throw e; } }
       peer = new Peer({ name: m.from, keys: this.keys, expectedKey: m.from,
         simulation: this.simulation, content: this.content, iceServers,
