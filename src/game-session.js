@@ -151,7 +151,7 @@ export class GameSession {
     while (this.queue.length && count++ < 4) {
       const message = this.queue[0];
       if (!(message.binary?this.peer.sendBinary(message.binary):this.peer.send('bulk', message))) break;
-      this.transportCounters.reliableBytes+=message.binary?.length??message.data?.length??message.buffers?.[0]?.length??0;
+      this.transportCounters.reliableBytes+=message.binary?.length??Buffer.byteLength(JSON.stringify(message));
       this.queue.shift(); this.bytes -= message.payloadBytes ?? message.data?.length ?? message.buffers?.[0]?.length ?? 0;
     }
   }

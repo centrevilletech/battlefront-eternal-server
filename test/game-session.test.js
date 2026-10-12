@@ -127,6 +127,6 @@ test('inspection exposes only the authenticated session transport counters',()=>
  const {peer,world,session}=setup();try{
   world.emit('message',{type:'reply',client:'other',resultType:'inspection'});assert.equal(peer.sent.length,0);
   session.enqueue({type:'test'});world.emit('message',{type:'reply',client:'player',resultType:'inspection'});
-  const result=peer.sent.at(-1)[1];assert.equal(result.transport.stateGroups,0);assert.equal(result.transport.bulkBuffered,0);assert(result.transport.reliableAgeMs>=0);
+  const result=peer.sent.at(-1)[1];session.flush();assert.equal(session.transportDiagnostics().reliableBytes,Buffer.byteLength(JSON.stringify({type:'test'})));assert.equal(result.transport.stateGroups,0);assert.equal(result.transport.bulkBuffered,0);assert(result.transport.reliableAgeMs>=0);
  }finally{session.close();}
 });
