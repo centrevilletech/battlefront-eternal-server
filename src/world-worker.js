@@ -1,3 +1,4 @@
+import {acknowledgeEntityPackets} from './entity-receipts.js';
 import {LatestBatch} from './latest-batch.js';
 import {PublicationCoordinator} from './publication-coordinator.js';
 import { liveActorRoster } from './actor-roster.js';
@@ -232,11 +233,11 @@ try {
           const accepted=world.input(m.client,command),stats=state.inputDiagnostics;
           stats[accepted?'accepted':'rejected']++;stats.last={sequence:command.sequence,tick:command.tick,generation:command.generation,epoch:command.epoch,serverTick:game.worldClock.tick,accepted,lookTotal:command.lookTotal,down:command.down.slice(0,32)};
         }
-        for(const packetId of packet.receipts)state.entity.ack({epoch:packet.epoch,packetId});
+        acknowledgeEntityPackets({client:m.client,state,publication,epoch:packet.epoch,packetIds:packet.receipts});
       }
       else if(m.type==='entityEdgeAck'){clients.get(m.client)?.entityEdges?.acknowledge(m);}
       else if(m.type==='entitySent'){const state=clients.get(m.client);if(publication){publication.receipt('admitted',m);if(state){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}else if(m.epoch===1&&state?.entity?.admitted(m.packetId)){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}
-      else if(m.type==='entityAck'){if(publication)publication.receipt('acks',m);else clients.get(m.client)?.entity?.ack({epoch:m.epoch,packetId:m.packetId});}
+      else if(m.type==='entityAck')acknowledgeEntityPackets({client:m.client,state:clients.get(m.client),publication,epoch:m.epoch,packetIds:[m.packetId]});
       else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick,m.initialBootstrap===true);}
       else if(m.type==='snapshotAck') {
         const state=clients.get(m.client),pending=state?.pendingCheckpoint;
