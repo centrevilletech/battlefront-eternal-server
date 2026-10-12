@@ -53,3 +53,8 @@ test('a native state send close race cannot escape the worker listener or acknow
  assert.doesNotThrow(()=>world.emit('message',{type:'entityPacket',client:'player',epoch:1,packetId:5,buffer:bytes}));
  assert(peer.closed);assert(session.closed);assert(!world.sent.some(m=>m.type==='entitySent'));assert(world.sent.some(m=>m.type==='leave'));
 });
+test('batched independent input ACKs expose only each authenticated recipient and retain edge feedback',()=>{
+ const {peer,world,session}=setup();try{world.emit('message',{type:'inputAck',inputAckBatchId:7,recipients:[{client:'other',ack:9},{client:'player',ack:4,edgeFeedback:{epoch:1,generation:2,received:[3],results:[]}}]});
+ assert.equal(peer.sent.length,2);assert.equal(peer.sent[0].m.ack,4);assert.equal(peer.sent[0].m.type,'input-ack');assert.equal(peer.sent[0].m.recipients,undefined);assert.equal(peer.sent[0].m.edgeFeedback,undefined);assert.equal(peer.sent[0].m.inputAckBatchId,undefined);assert.deepEqual(peer.sent[1].m.received,[3]);assert.equal(peer.sent[1].m.type,'entity-edge-results');
+ }finally{session.close();}
+});

@@ -47,7 +47,7 @@ try {
   let journal,lastJournalId,eventSerial=0;
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   let publicationSession=0;
-  const publication=workerData.publicationWorker?new PublicationCoordinator({engine:root,maxClients:workerData.publicationMaxClients??192,fatal:message=>parentPort.postMessage({type:'publicationFatal',message}),send:(message,transfer)=>parentPort.postMessage(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
+  const publication=workerData.publicationWorker?new PublicationCoordinator({engine:root,maxClients:workerData.publicationMaxClients??192,fatal:message=>{clearInterval(timer);inputAcks?.close();parentPort.postMessage({type:'publicationFatal',message});},send:(message,transfer)=>parentPort.postMessage(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
   const inputAcks=publication?new LatestBatch(message=>parentPort.postMessage(message),{fatal:message=>publication.terminal(message)}):null;
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
