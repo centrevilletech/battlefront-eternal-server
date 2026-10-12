@@ -13,7 +13,7 @@ export class OnlineServer extends EventEmitter {
     this.certificate = loadCertificate(directory);
     this.master = new MasterClient({ url: config.master, keys: this.keys, noticeAccepted: config.onlineNoticeAccepted });
     this.bans = new BanCache(this.master, join(directory, 'master-ban-key'));
-    this.simulation = 'bfe-sim-3'; this.content = config.content ?? 'bfe-content-1';
+    this.simulation = 'bfe-sim-4'; this.content = config.content ?? 'bfe-content-1';
     this.master.on('signal', m => this.signal(m).catch(e => this.emit('fault', e.message)));
     this.master.on('disconnected', () => { if (!this.closed) this.reconnect(); });
   }

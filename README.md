@@ -76,7 +76,7 @@ Local capacity testing uses `node --max-old-space-size=6144 scripts/load-peers.m
 Dedicated hosts default to native RTC and use UDP when allocating their own TURN relay. Remote clients can still reach that allocation through their own TCP or TLS relay connection. `BFE_PORTABLE_RTC=1` or configuration `portableRTC: true` selects the portable backend for desktop packaging or hosts requiring TCP/TLS-only egress. `node scripts/relay-smoke.mjs --mixed` checks native-host interoperability with portable TCP/TLS clients using the configured public connectivity infrastructure.
 
 All online, LAN and desktop HOST sessions require protocol 2, simulation
-`bfe-sim-3`, and profile `entity-state-v1`. Older clients receive an update-required
+`bfe-sim-4`, and profile `entity-state-v1`. Older clients receive an update-required
 version error. There is no capability negotiation or legacy gameplay fallback.
 The identity proof uses the `BFE/2` transcript and the same signed peer identities.
 
