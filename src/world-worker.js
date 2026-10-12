@@ -53,6 +53,7 @@ try {
     const publicationKeyframe=[...clients].some(([id,state])=>state.started&&(state.keyframe||world.players.get(id)?.keyframe));
     const groups=new Map();
     let semanticRecords,commonSummaries;
+    const eligibilityCache=new Map();
     for (const [client, state] of clients) if (state.started) {
       if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
@@ -73,7 +74,7 @@ try {
               state.entity.update(prepared,entityImportance(record,interest));
             }
             for(const prepared of commonSummaries)state.entity.update(prepared,4);
-            for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false}))state.entity.update(record,4);
+            for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false,eligibilityCache}))state.entity.update(record,4);
             const own=actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
             const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
             const offer=(packet,ownCorrection)=>{
