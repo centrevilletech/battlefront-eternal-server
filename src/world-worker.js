@@ -33,10 +33,14 @@ try {
   const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
   const publish = () => {
     const begun=performance.now(),capturedAtUnixMs=Date.now();
+    // Promote the entire publication before its first encode. A joining/resyncing
+    // recipient must not create a second shared keyframe at the same tick and
+    // invalidate another recipient's already-issued initial journal baseline.
+    const publicationKeyframe=[...clients].some(([id,state])=>state.started&&(state.keyframe||world.players.get(id)?.keyframe));
     const groups=new Map();
     for (const [client, state] of clients) if (state.started) {
       if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,ackActions:actor.actions?.ack??0});}
-      const keyframe=Boolean(state.keyframe), packet=world.snapshot(client,{keyframe,sharedPacket:true});
+      const keyframe=Boolean(publicationKeyframe||state.keyframe), packet=world.snapshot(client,{keyframe,sharedPacket:true});
       state.keyframe=false;if(!packet)continue;
       if(packet instanceof ArrayBuffer){parentPort.postMessage({type:'packet',client,buffer:packet,keyframe},[packet]);continue;}
       let group=groups.get(packet.sharedId);
