@@ -20,3 +20,7 @@ test('lifecycle and viewpoint-free spectators retain bounded priorities',()=>{
  assert.equal(entityImportance({kind:'tombstone'}),16);assert.equal(entityImportance({kind:'seat'}),16);
  assert.equal(entityImportance({kind:'vehicle'}),6);assert.equal(entityImportance({kind:'soldier'}),1);
 });
+
+test('persistent item and recon removals retain urgent lifecycle priority',()=>{
+ for(const kind of ['item','remote']){assert.equal(entityImportance({kind,active:false,position:[0,0,10000]},view),16);assert(entityImportance({kind,active:true,position:[0,0,30]},view)>entityImportance({kind,active:true,position:[0,0,300]},view));}
+});

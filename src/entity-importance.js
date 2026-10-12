@@ -2,7 +2,7 @@
 // never accepted as an interest hint. This ranks records; it is not visibility
 // culling and never removes the low-priority starvation floor.
 export function entityImportance(record,{position,velocity=[0,0,0],forward,flying=false}={}) {
-  if(record.kind==='seat'||record.kind==='tombstone')return 16;
+  if(record.kind==='seat'||record.kind==='tombstone'||((record.kind==='item'||record.kind==='remote')&&record.active===false))return 16;
   if(record.kind==='summary')return 4;
   if(!record.position||!position)return record.kind==='vehicle'?6:1;
   const dx=record.position[0]-position[0],dy=record.position[1]-position[1],dz=record.position[2]-position[2];
