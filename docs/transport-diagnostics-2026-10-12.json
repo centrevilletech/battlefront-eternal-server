@@ -489,6 +489,110 @@
         "received": 72371.1830825193,
         "sent": 17360.694393238384
       }
+    },
+    {
+      "scenario": "Chromium journal, TTL100, server32KiB SCTP and4KiB state buffer, five percent loss plus jitter",
+      "sourceReport": "chromium-ttl100-buffer32k-state4k-loss5-jitter.json",
+      "source": {
+        "engine": {
+          "revision": "d7dc5ce00f64b980de1337f28efb28d2b8638e6f",
+          "dirty": true
+        },
+        "server": {
+          "revision": "4d96767cc0d9858957ec0612349fabac132ddfb3",
+          "dirty": false
+        }
+      },
+      "stateAgeP95Ms": 666.6666666666666,
+      "stateAgeMaxMs": 1066.6666666666667,
+      "actionP95Ms": 474.19999980926514,
+      "connected": 2,
+      "errors": [],
+      "impairment": {
+        "kind": "Linux tc netem on isolated namespace UDP traffic",
+        "delayEachDirectionMs": 50,
+        "jitterMs": 15,
+        "packetLossPercent": 5.0
+      },
+      "negotiated": [
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        },
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        }
+      ],
+      "requestedProtocol": {
+        "journal": true,
+        "relative": false,
+        "transients": false
+      },
+      "serverTransportTuning": {
+        "sctpSendBuffer": 32768,
+        "stateBufferLimit": 4096,
+        "journalFrameBytes": 20000,
+        "scope": "Native authoritative server only; Chromium SCTP buffers unchanged"
+      },
+      "payloadBytesPerPlayerSecond": {
+        "received": 58707.12586240675,
+        "sent": 17154.248884315683
+      }
+    },
+    {
+      "scenario": "Chromium journal, TTL100, server32KiB SCTP and4KiB state buffer,1KiB fragments, five percent loss plus jitter",
+      "sourceReport": "chromium-ttl100-buffer32k-state4k-frame1k-loss5-jitter.json",
+      "source": {
+        "engine": {
+          "revision": "86a42ac2e372a9c8133462d3652fadc1dd9d50dc",
+          "dirty": true
+        },
+        "server": {
+          "revision": "4d96767cc0d9858957ec0612349fabac132ddfb3",
+          "dirty": false
+        }
+      },
+      "stateAgeP95Ms": 1133.3333333333333,
+      "stateAgeMaxMs": 1450,
+      "actionP95Ms": 1223.5999999046326,
+      "connected": 2,
+      "errors": [],
+      "impairment": {
+        "kind": "Linux tc netem on isolated namespace UDP traffic",
+        "delayEachDirectionMs": 50,
+        "jitterMs": 15,
+        "packetLossPercent": 5.0
+      },
+      "negotiated": [
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        },
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        }
+      ],
+      "requestedProtocol": {
+        "journal": true,
+        "relative": false,
+        "transients": false
+      },
+      "serverTransportTuning": {
+        "sctpSendBuffer": 32768,
+        "stateBufferLimit": 4096,
+        "journalFrameBytes": 1000,
+        "scope": "Native authoritative server only; Chromium SCTP buffers unchanged"
+      },
+      "payloadBytesPerPlayerSecond": {
+        "received": 62232.92429546176,
+        "sent": 16662.52496592396
+      }
     }
   ],
   "conclusion": "Keep journal, finite state lifetime, and transient events opt-in. A 100 ms state lifetime removes most queue growth in these short loss tests, but latency and capacity gates remain unmet. The transient event comparison regressed and must not become the default. Random netem loss patterns were not seeded; longer repeat trials are still required."
