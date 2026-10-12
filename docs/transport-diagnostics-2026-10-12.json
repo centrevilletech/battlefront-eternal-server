@@ -593,7 +593,166 @@
         "received": 62232.92429546176,
         "sent": 16662.52496592396
       }
+    },
+    {
+      "source": {
+        "engine": {
+          "revision": "37f17dee1101eb6b5452c455699fd36255a69dc0",
+          "dirty": true
+        },
+        "server": {
+          "revision": "febfde5bb93d75d8f44777c9b83b67e28ac8a535",
+          "dirty": true
+        }
+      },
+      "profile": "fresh-v1",
+      "warmup": 2,
+      "seconds": 5.06908574,
+      "netemSeed": 20261012,
+      "netemSeedMeaning": "Verified kernel PRNG initialization; changed packet cadence changes which packets encounter loss",
+      "inputClock": "Production InputLead extrapolation and FixedClock; input-lead-ms is fallback RTT until ICE stats arrive",
+      "stateAgeMs": {
+        "count": 38,
+        "p50": 2566.6666666666665,
+        "p95": 6983.333333333333,
+        "p99": 7233.333333333333,
+        "max": 7233.333333333333
+      },
+      "transportAckCounts": [
+        90,
+        94
+      ],
+      "stageTimingMs": {
+        "captureToCompression": {
+          "count": 87,
+          "p50": 10,
+          "p95": 20,
+          "p99": 45,
+          "max": 45
+        },
+        "compression": {
+          "count": 87,
+          "p50": 2,
+          "p95": 6,
+          "p99": 28,
+          "max": 28
+        },
+        "compressionToOffer": {
+          "count": 87,
+          "p50": 0,
+          "p95": 0,
+          "p99": 1,
+          "max": 1
+        },
+        "offerToReceipt": {
+          "count": 87,
+          "p50": 96,
+          "p95": 399,
+          "p99": 468,
+          "max": 468
+        },
+        "captureToReceipt": {
+          "count": 87,
+          "p50": 107,
+          "p95": 408,
+          "p99": 484,
+          "max": 484
+        }
+      },
+      "stageTimingMeaning": "Same-host Unix clocks; offer-to-receipt combines SCTP queueing, network transit and browser dispatch, not socket queue alone",
+      "kernelUdpCounters": {
+        "bytes": 934927,
+        "packets": 2477,
+        "drops": 104,
+        "seconds": 5.0950610580000015,
+        "bytesPerPlayerSecond": 91748.36075144046,
+        "meaning": "Isolated netem loopback UDP queue counters over measurement window; both directions and retransmissions, not physical-link wire bytes"
+      },
+      "errors": [],
+      "failed": true,
+      "scenario": "Fresh fixed profile, one reliable initial join before coherent keyframe publication (failed one peer)",
+      "sourceReport": "fresh-reliable-join-functional.json",
+      "meaning": "Short functional regression only, concurrent CI permitted; not a timing or capacity qualification"
+    },
+    {
+      "source": {
+        "engine": {
+          "revision": "37f17dee1101eb6b5452c455699fd36255a69dc0",
+          "dirty": true
+        },
+        "server": {
+          "revision": "af134f2c6b789534e1523f43218cece0a5372f9a",
+          "dirty": true
+        }
+      },
+      "profile": "fresh-v1",
+      "warmup": 2,
+      "seconds": 5.004017281999999,
+      "netemSeed": 20261012,
+      "netemSeedMeaning": "Verified kernel PRNG initialization; changed packet cadence changes which packets encounter loss",
+      "inputClock": "Production InputLead extrapolation and FixedClock; input-lead-ms is fallback RTT until ICE stats arrive",
+      "stateAgeMs": {
+        "count": 38,
+        "p50": 183.33333333333334,
+        "p95": 1450,
+        "p99": 1466.6666666666667,
+        "max": 1466.6666666666667
+      },
+      "transportAckCounts": [
+        72,
+        96
+      ],
+      "stageTimingMs": {
+        "captureToCompression": {
+          "count": 153,
+          "p50": 11,
+          "p95": 16,
+          "p99": 25,
+          "max": 32
+        },
+        "compression": {
+          "count": 153,
+          "p50": 2,
+          "p95": 7,
+          "p99": 9,
+          "max": 10
+        },
+        "compressionToOffer": {
+          "count": 153,
+          "p50": 0,
+          "p95": 0,
+          "p99": 1,
+          "max": 1
+        },
+        "offerToReceipt": {
+          "count": 153,
+          "p50": 95,
+          "p95": 1448,
+          "p99": 1484,
+          "max": 1511
+        },
+        "captureToReceipt": {
+          "count": 153,
+          "p50": 116,
+          "p95": 1461,
+          "p99": 1495,
+          "max": 1520
+        }
+      },
+      "stageTimingMeaning": "Same-host Unix clocks; offer-to-receipt combines SCTP queueing, network transit and browser dispatch, not socket queue alone",
+      "kernelUdpCounters": {
+        "bytes": 1013722,
+        "packets": 2890,
+        "drops": 122,
+        "seconds": 5.0163214799999984,
+        "bytesPerPlayerSecond": 101042.36780295034,
+        "meaning": "Isolated netem loopback UDP queue counters over measurement window; both directions and retransmissions, not physical-link wire bytes"
+      },
+      "errors": [],
+      "scenario": "Fresh fixed profile, one reliable initial join with coherent keyframe publication",
+      "sourceReport": "fresh-coherent-join-functional.json",
+      "meaning": "Short functional regression only, concurrent CI permitted; not a timing or capacity qualification"
     }
   ],
-  "conclusion": "Keep journal, finite state lifetime, and transient events opt-in. A 100 ms state lifetime removes most queue growth in these short loss tests, but latency and capacity gates remain unmet. The transient event comparison regressed and must not become the default. Random netem loss patterns were not seeded; longer repeat trials are still required."
+  "conclusion": "Keep journal, finite state lifetime, and transient events opt-in. A 100 ms state lifetime removes most queue growth in these short loss tests, but latency and capacity gates remain unmet. The transient event comparison regressed and must not become the default. Random netem loss patterns were not seeded; longer repeat trials are still required. Seeded fresh-profile functional probes were added later with 2-second warmup and 5-second observation. Coherent one-time reliable join permits both clients to materialize state, but p95 state age remains 1450 ms. No default promotion; proceed to independently applicable entity messages rather than longer qualification of this failing interim format."
 }
