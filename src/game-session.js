@@ -120,7 +120,8 @@ export class GameSession {
     if(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250){this.transportCounters.stateDropped++;return;}
     const bytes=Buffer.from(m.buffer);
     if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
-    if((this.peer.channels?.get('state')?.bufferedAmount()??0)>0){this.transportCounters.stateDropped++;return;}
+    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>0){this.transportCounters.stateDropped++;return;} }
+    catch { this.peer.close('channel-state-send-failed');return; }
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;

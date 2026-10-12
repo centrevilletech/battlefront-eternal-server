@@ -104,3 +104,14 @@ test('old protocol receives an explicit version error before authentication',()=
  assert.throws(()=>peer.handshake({type:'hello',nonce:'a'.repeat(64),publicKey:'b'.repeat(60),protocol:2,simulation:'bfe-sim-3',profile:'entity-state-v1'}),/Update required/);
  assert.match(sent[0].message,/bfe-sim-4/);assert(!peer.authenticated);
  });
+test('native readiness and send close races isolate the affected peer without admitting state',()=>{
+ for(const failure of ['isOpen','bufferedAmount','sendMessage','sendMessageBinary']){
+  const peer=new EventEmitter();Object.setPrototypeOf(peer,Peer.prototype);Object.assign(peer,{authenticated:true,sequence:0,stateBufferLimit:1024,pc:{close(){throw Error('already closed');}}});
+  const channel={isOpen:()=>true,bufferedAmount:()=>0,sendMessage(){},sendMessageBinary(){},close(){throw Error('already closed');}};
+  channel[failure]=()=>{throw Error('libdatachannel send failed errno=104');};peer.channels=new Map([['state',channel],['events',channel],['bulk',channel]]);
+  let closes=0;peer.on('closed',()=>closes++);
+  const send= failure==='sendMessage'?()=>peer.send('events',{type:'test'}):()=>peer.sendStatePacket([Buffer.alloc(30)],{maxBuffered:0});
+  assert.equal(send(),false);assert.equal(peer.closed,true);assert.equal(closes,1);assert.equal(peer.sendBinary(Buffer.alloc(30)),false);peer.close();assert.equal(closes,1);
+ }
+ const peer=new EventEmitter();Object.setPrototypeOf(peer,Peer.prototype);peer.authenticated=true;peer.channels=new Map([['bulk',{isOpen:()=>true,bufferedAmount:()=>0,sendMessageBinary(){throw Error('errno=104');},close(){}}]]);peer.pc={close(){}};assert.equal(peer.sendBinary(Buffer.alloc(30)),false);assert(peer.closed);
+});
