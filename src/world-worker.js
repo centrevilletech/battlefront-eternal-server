@@ -202,6 +202,8 @@ try {
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content, networkContract });
+  // A notice from the server itself, to everyone in the battle (but `except`): a player joining or leaving, the operator's announcement.
+  const notice=(text,except=null)=>{for(const [client,state] of clients)if(state.started&&client!==except)parentPort.postMessage({type:'chat',client,text,sender:'Server',playerId:0,team:false,admin:true});};
   parentPort.on('message', async m => {
     try {
       if(m.type==='resetMetrics'){if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
@@ -226,7 +228,8 @@ try {
         if(m.entity)clients.get(m.client).entityEdges=new EntityEdges({Receiver:entityRuntime.EntityEdgeReceiver,actor:world.players.get(m.client),world,client:m.client,registry:entityRegistry});
         if(m.entity)parentPort.postMessage({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:m.entity?'entity-v1':clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
-      } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
+        {const name=world.players.get(m.client)?.character?.name;if(name&&!m.spectator)notice(`${name} joined the game`,m.client);}
+      } else if (m.type === 'leave') { report(); {const name=clients.has(m.client)?world.players.get(m.client)?.character?.name:null;if(name)notice(`${name} left the game`,m.client);} journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
       else if(m.type==='entityInput'){
         const state=clients.get(m.client);if(!state?.entity||!state.started)return;
         const packet=entityRuntime.decodeEntityInput(new Uint8Array(m.buffer),entityRegistry);
@@ -253,7 +256,7 @@ try {
       else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');state.snapshotAck=null;state.pendingCheckpoint=null;state.bootstrapAt=0;state.fresh?.reset(journal?.epoch??null);}}
       else if(m.type==='actions'){if(clients.get(m.client)?.started)world.actions?.(m.client,m.envelope);}
       else if(m.type==='fire'){const state=clients.get(m.client),accepted=Boolean(state?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;if(state){state.fireDiagnostics[accepted?'accepted':'rejected']++;state.fireDiagnostics.last={id:m.edge.id,tick:m.edge.tick,generation:m.edge.generation,button:m.edge.button,pressed:m.edge.pressed,viewTick:m.edge.viewTick,serverTick:game.worldClock.tick,accepted};}parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
-      else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
+      else if (m.type === 'announcement') notice(m.text);
       else if (m.type === 'chat') {
         const sender = world.player(m.client);
         if (!sender || !clients.get(m.client)?.started) return;
