@@ -3,16 +3,17 @@
 export class EntityEdges {
   constructor({Receiver,actor,world,client,registry,capacity=256}) {
     this.actor=actor;this.world=world;this.client=client;this.registry=registry;this.capacity=capacity;
-    this.receiver=new Receiver();this.pending=new Map();this.results=new Map();this.received=[];
+    this.receiver=new Receiver({maxFuture:120});this.pending=new Map();this.results=new Map();this.received=[];
     actor.actions.enableOutcomes();actor.fire.enableOutcomes();this.reset(1,actor.unit.generation);
   }
   reset(epoch,generation) {
     this.epoch=epoch;this.generation=generation;this.receiver.reset(epoch,generation);
-    this.pending.clear();this.results.clear();this.received=[];
+    this.pending.clear();this.results.clear();this.received=[];this.tick=0;
     this.actionSerial=this.actor.actions.received;this.fireSerial=this.actor.fire.received;
   }
-  result(id,status) {if(!this.results.has(id)&&this.results.size>=this.capacity)throw Error('entity result backlog');this.results.set(id,{id,status});}
+  result(id,status,tick=this.tick) {if(!this.results.has(id)&&this.results.size>=this.capacity)throw Error('entity result backlog');this.results.set(id,{id,status,tick});}
   receive(packet,tick) {
+    this.tick=tick;
     if(packet.epoch!==this.epoch||packet.generation!==this.generation)return;
     if(this.pending.size+this.receiver.queue.size+packet.edges.length>this.capacity)throw Error('entity edge backlog');
     const {receipts,rejected}=this.receiver.receive(packet.edges,tick);
@@ -20,12 +21,13 @@ export class EntityEdges {
     for(const value of rejected)this.result(value.id,value.status==='expired'?'expired':'rejected');
   }
   advance(tick) {
+    this.tick=tick;
     for(const edge of this.receiver.take(tick)) {
       if(edge.tick<tick-30){this.result(edge.id,'expired');continue;}
       let accepted=false,lane,id;
       if(edge.kind==='fire') {
         lane='fire';id=this.fireSerial=Math.max(this.fireSerial,this.actor.fire.received)+1;
-        accepted=this.world.fire(this.client,{...edge,id,button:edge.button==='fireSecondary'?1:0});
+        accepted=this.world.fire(this.client,{...edge,id,externalId:edge.id,button:edge.button==='fireSecondary'?1:0});
       } else {
         lane='actions';id=this.actionSerial=Math.max(this.actionSerial,this.actor.actions.received)+1;const actions=[],human=[];
         if(edge.kind==='action')actions.push(edge.action);
@@ -42,7 +44,8 @@ export class EntityEdges {
       if(accepted)this.pending.set(`${lane}:${id}`,edge.id);else this.result(edge.id,'rejected');
     }
   }
-  consumed() {
+  consumed(tick=this.tick) {
+    this.tick=tick;
     for(const lane of ['actions','fire'])for(const outcome of this.actor[lane].drainOutcomes()) {
       const key=`${lane}:${outcome.id}`,id=this.pending.get(key);if(id===undefined)continue;
       this.pending.delete(key);this.result(id,outcome.status);

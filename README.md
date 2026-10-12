@@ -152,8 +152,10 @@ simulation received the control, not that a weapon fired or hit anything.
 This is an infantry/flyer integration prototype, not complete multiplayer parity.
 Ground-driver, turret and walker correction are unsupported; remote unsupported
 actors produce bounded diagnostics. World objectives, effects and other gameplay
-coverage remain in progress. The initial smoke uses 20 Hz own correction with
-remaining packet space for actors; that cadence has not qualified 64-player
-coverage or bandwidth. Legacy JSON input is temporarily accepted solely to stage
-client integration and will be removed from this profile when the compact sender
-is verified. No experimental profile is enabled for ordinary clients.
+coverage remain in progress. The experimental profile reserves 20 Hz own correction and limits offered state
+payload to 26,000 bytes/second with a 2,200-byte burst. Remaining credit admits
+remote-only messages, with nearer actors weighted ahead of distant actors.
+Native admission age is exposed separately from actual client delivery age;
+control traffic and network overhead are outside that state budget. This profile
+has not qualified 64-player coverage, latency or bandwidth. This profile requires compact binary gameplay input; movement and numbered
+actions do not fall back to the legacy reliable JSON lane. No experimental profile is enabled for ordinary clients.

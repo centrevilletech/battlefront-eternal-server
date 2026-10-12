@@ -64,6 +64,7 @@ export class GameSession {
   }
   message(label, m) {
     if(this.closed)return;
+    if(this.entity&&['input','inputs','actions','fire'].includes(m.type))return this.peer.close('entity-input-requires-binary');
     if(m.type==='entity-edge-ack'){
       if(!this.entity||label!=='state'||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.ids)||m.ids.length>32||m.ids.some(id=>!Number.isSafeInteger(id)||id<1))return;
       const now=Date.now();if(now-(this.entityAckWindow??0)>=1000){this.entityAckWindow=now;this.entityAckCount=0;}if(++this.entityAckCount>120)return this.peer.close('entity-ack-flood');
@@ -99,7 +100,6 @@ export class GameSession {
       if (!text) return;
       this.chatTimes.push(now); this.world.postMessage({ type:'chat', client:this.id, text, team:m.team === true });
     } else if (m.type === 'input' || m.type === 'inputs') {
-      if(this.entity&&label==='state'&&m.entityAck)this.message('state',{type:'entity-ack',...m.entityAck});
       if(this.fresh && label==='state' && m.snapshotAck)this.message('state',{type:'snapshot-ack',...m.snapshotAck});
       const commands = m.type === 'input' ? [m.command] : m.commands;
       if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
@@ -131,7 +131,7 @@ export class GameSession {
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
-    this.world.postMessage({type:'entitySent',client:this.id,epoch:m.epoch,packetId:m.packetId});
+    this.world.postMessage({type:'entitySent',client:this.id,epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
   }
   async unorderedSnapshot(m,magic=JOURNAL_MAGIC,versionSlot='snapshotVersion') {
     const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);

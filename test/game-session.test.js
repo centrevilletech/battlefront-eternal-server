@@ -175,8 +175,8 @@ test('semantic packets are unfragmented and only native admission authorizes exa
   assert(world.sent[0].entity);const buffer=Buffer.alloc(1100);buffer.writeUInt32LE(0x31454e42);const message={type:'entityPacket',client:'player',epoch:1,packetId:2,buffer};
   world.emit('message',message);assert.equal(sends,0);assert.equal(world.sent.length,1);
   buffered=0;accept=false;world.emit('message',message);assert.equal(world.sent.length,1);
-  accept=true;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entitySent',client:'player',epoch:1,packetId:2});
-  peer.emit('message','state',{type:'inputs',commands:[],entityAck:{epoch:1,packetId:2,client:'victim'}});
+  accept=true;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entitySent',client:'player',epoch:1,packetId:2,ownCorrection:false,tick:0});
+  peer.emit('message','state',{type:'entity-ack',epoch:1,packetId:2,client:'victim'});
   assert(world.sent.some(m=>m.type==='entityAck'&&m.client==='player'&&m.packetId===2));
   const n=world.sent.length;peer.emit('message','events',{type:'entity-ack',epoch:1,packetId:2});assert.equal(world.sent.length,n);
  } finally {session.close();}

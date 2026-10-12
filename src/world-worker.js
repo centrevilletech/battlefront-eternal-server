@@ -1,3 +1,4 @@
+import { EntityBudget } from './entity-budget.js';
 import { EntityEdges } from './entity-edges.js';
 import { FreshStateWindow } from './fresh-state.js';
 import { updateRoomCapabilities } from './room-capabilities.js';
@@ -52,19 +53,30 @@ try {
     const groups=new Map();
     let semanticRecords;
     for (const [client, state] of clients) if (state.started) {
-      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,ackActions:actor.actions?.ack??0});}
+      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
         const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
         if(state.entityReady){
           try {
             semanticRecords??=entityCapture.capture(game.worldClock.tick);
             if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
-            for(const record of semanticRecords)state.entity.update(record,record.kind==='seat'||record.kind==='tombstone'?4:1);
+            const actor=world.players.get(client),position=actor.unit.position;
+            for(const record of semanticRecords){
+              if(record.kind==='soldier'&&record.id===actor.unit.id)continue;
+              const distance=record.position?Math.hypot(record.position[0]-position.x,record.position[1]-position.y,record.position[2]-position.z):Infinity;
+              state.entity.update(record,record.kind==='seat'||record.kind==='tombstone'?8:distance<40?8:distance<100?3:1);
+            }
             for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client}))state.entity.update(record,4);
-            const actor=world.players.get(client),own=entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
-            const packet=state.entity.packet({tick:game.worldClock.tick,own,ackInput:actor.mailbox.ack,ackActions:actor.actions?.ack??0,ackFire:actor.fire?.received??0});
-            const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
-            parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,capturedAtUnixMs,buffer},[buffer]);
+            const own=entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
+            const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
+            const offer=(packet,ownCorrection)=>{
+              if(!state.entityBudget.take(packet.buffer.byteLength,begun)){state.entityMetrics.budgetDropped++;return false;}
+              state.entityMetrics[ownCorrection?'ownOffered':'remoteOffered']++;
+              const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
+              parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs,buffer},[buffer]);return true;
+            };
+            const packet=state.entity.packet({...fields,own});
+            if(offer(packet,true)&&state.entityBudget.available(begun)>=1100)offer(state.entity.packet({...fields,excludePacketIds:[packet.packetId]}),false);
           } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
           continue;
         }
@@ -146,7 +158,7 @@ try {
       state.entityEdges.advance(game.worldClock.tick+1);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});}
     }
     const tick=world.step();
-    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed();}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed(tick);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
@@ -166,7 +178,7 @@ try {
           entityCapture=new entityRuntime.EntityWorldCapture(game,entityRegistry,{fireCounter:unit=>entityShots.counter(unit)});
         }
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
+        clients.set(m.client, { started: false, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,entityBudget:m.entity?new EntityBudget():null,entityMetrics:{ownOffered:0,remoteOffered:0,admitted:0,budgetDropped:0,lastOwnTick:null},compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
         if(m.entity)clients.get(m.client).entityEdges=new EntityEdges({Receiver:entityRuntime.EntityEdgeReceiver,actor:world.players.get(m.client),world,client:m.client,registry:entityRegistry});
         if(m.entity)parentPort.postMessage({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:m.entity?'entity-v1':clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
@@ -183,7 +195,7 @@ try {
         for(const packetId of packet.receipts)state.entity.ack({epoch:packet.epoch,packetId});
       }
       else if(m.type==='entityEdgeAck'){clients.get(m.client)?.entityEdges?.acknowledge(m);}
-      else if(m.type==='entitySent'){const state=clients.get(m.client);if(m.epoch===1)state?.entity?.admitted(m.packetId);}
+      else if(m.type==='entitySent'){const state=clients.get(m.client);if(m.epoch===1&&state?.entity?.admitted(m.packetId)){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}
       else if(m.type==='entityAck'){clients.get(m.client)?.entity?.ack({epoch:m.epoch,packetId:m.packetId});}
       else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick,m.initialBootstrap===true);}
       else if(m.type==='snapshotAck') {
@@ -224,7 +236,7 @@ try {
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
         else if (m.method === 'inspect') {
           const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
-          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
+          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?{profile:'entity-v1-experimental',payloadBytesPerSecond:26000,burstBytes:2200,ownNominalHz:20,...clients.get(m.client).entityMetrics,offeredBytes:clients.get(m.client).entityBudget.offeredBytes,admissionAgeTicks:[...clients.get(m.client).entity.records.values()].map(entry=>({id:entry.record.id,kind:entry.record.kind,age:Number.isFinite(entry.last)?game.worldClock.tick-entry.last:null}))}:undefined,inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
         }
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {

@@ -105,8 +105,8 @@ export class Peer extends EventEmitter {
     });
     ch.onMessage((raw) => {
       try {
-        if(typeof raw!=='string'&&label==='state'&&this.authenticated&&this.remote?.capabilities?.includes('entity-state-v1')){const bytes=Buffer.from(raw);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)throw Error('invalid entity input');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
-        if(typeof raw!=='string' && (label==='bulk'||label==='state') && this.authenticated && (this.capabilities.includes('binary-bulk-v1')||this.capabilities.includes('snapshot-journal-v1'))){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
+        if(typeof raw!=='string'&&label==='state'&&this.authenticated&&(this.initiator?this.capabilities.includes('entity-state-v1'):this.remote?.capabilities?.includes('entity-state-v1'))){const bytes=Buffer.from(raw),magic=this.initiator?0x31454e42:0x31494e42;if(bytes.length>1100||bytes.length<(this.initiator?30:16)||bytes.readUInt32LE(0)!==magic)throw Error('invalid entity message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
+        if(typeof raw!=='string' && (label==='bulk'||label==='state') && this.authenticated && (this.capabilities.includes('binary-bulk-v1')||this.capabilities.includes('snapshot-journal-v1')||label==='bulk'&&this.capabilities.includes('entity-state-v1'))){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
         if (typeof raw !== "string" || Buffer.byteLength(raw) > 32768)
           throw Error("invalid message");
         const m = JSON.parse(raw);

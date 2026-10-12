@@ -82,3 +82,13 @@ test('native buffered sends are accepted once and complete state groups cross th
  assert.equal(peer.sendStatePacket([Buffer.alloc(900),Buffer.alloc(900),Buffer.alloc(900)]),true);assert.equal(sent.length,5);
  assert.equal(peer.sendStatePacket([Buffer.alloc(900)]),false);assert.equal(sent.length,5);
 });
+
+test('semantic binary direction and initial bulk are authenticated and bounded',()=>{
+ for(const initiator of [false,true]){
+  const peer=Object.assign(new EventEmitter(),{initiator,channels:new Map(),authenticated:true,lastSequence:0,capabilities:initiator?['entity-state-v1']:[],remote:{capabilities:['entity-state-v1']},close(){this.closed=true;}});Object.setPrototypeOf(peer,Peer.prototype);peer.close=()=>{peer.closed=true;};
+  let receive;const channel={getLabel:()=> 'state',onError(){},onClosed(){},onOpen(){},onMessage:fn=>{receive=fn;},isOpen:()=>true};Peer.prototype.channel.call(peer,channel);
+  let delivered=0;peer.on('binary',()=>delivered++);const bytes=Buffer.alloc(40);bytes.writeUInt32LE(initiator?0x31454e42:0x31494e42);receive(bytes);assert.equal(delivered,1);
+  bytes.writeUInt32LE(initiator?0x31494e42:0x31454e42);receive(bytes);assert(peer.closed);assert.equal(delivered,1);
+  peer.closed=false;if(initiator){channel.getLabel=()=> 'bulk';Peer.prototype.channel.call(peer,channel);receive(Buffer.alloc(100));assert.equal(delivered,2);}
+ }
+});
