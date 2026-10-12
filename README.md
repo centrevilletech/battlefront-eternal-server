@@ -115,7 +115,11 @@ snapshot dependencies. Its qualification invariants are:
 - Every admitted journal snapshot can become a baseline. Ordinary publication
   continues from the last confirmed baseline while newer ACKs are lost. There
   is no pending-checkpoint stop-and-wait gate.
-- Missing or expired baselines trigger bounded-cadence newest absolute recovery,
+- One bounded initial join snapshot uses reliable bulk. Its admission receipt is
+  recorded only after every fragment enters the native sender, and its immutable
+  baseline remains pinned until the client acknowledges it. Resyncs and epoch
+  changes never authorize another reliable world transfer.
+- Missing or evicted baselines trigger bounded-cadence newest absolute recovery,
   never a recurring reliable checkpoint or replay of an indefinitely old
   bootstrap. Late snapshots can populate immutable caches without rewinding the
   rendered world.
@@ -123,7 +127,8 @@ snapshot dependencies. Its qualification invariants are:
   enqueue. Unsent superseded application work is discarded. This is a queue
   bound, not an ACK-per-publication rate limit.
 - Snapshot history is bounded by count, age and conservatively accounted bytes;
-  only currently needed baselines are pinned. Membership/deletion remains exact
+  only currently needed baselines are pinned. A confirmed pinned baseline does
+  not expire merely because its ACK was delayed. Membership/deletion remains exact
   for this interim whole-world journal format.
 
 Tests must cover dropped/reordered ACKs, ACKs for offered-but-unsent snapshots,

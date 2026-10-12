@@ -137,7 +137,7 @@ test('fresh state ACK admission and input feedback never depend on reliable bulk
  const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try{
   assert(world.sent[0].fresh);assert(world.sent[0].separateActions&&world.sent[0].compactMetadata&&world.sent[0].linearProjectiles);assert(session.binary);assert(!world.sent[0].relativeSnapshots&&!world.sent[0].transientSnapshots);
-  const dispatch=[],originalDispatch=session.unorderedSnapshot;session.unorderedSnapshot=value=>dispatch.push(value);world.emit('message',{type:'journalPacket',client:'player',reliable:true});assert.equal(dispatch.length,1,'even bootstrap snapshots avoid reliable bulk');session.unorderedSnapshot=originalDispatch;
+  const dispatch=[],originalDispatch=session.unorderedSnapshot;session.unorderedSnapshot=value=>dispatch.push(value);world.emit('message',{type:'journalPacket',client:'player',reliable:true});assert.equal(dispatch.length,1,'recurring recovery snapshots avoid reliable bulk');session.unorderedSnapshot=originalDispatch;
   const snapshot={buffer:Buffer.from('fresh'),sharedId:'fresh:1',snapshotEpoch:2,snapshotTick:30,capturedAtUnixMs:Date.now(),metadata:{playerId:1}};
   const before=compressionStats.calls;await session.unorderedSnapshot(snapshot);assert.equal(compressionStats.calls,before);assert(!world.sent.some(m=>m.type==='snapshotSent'));
   world.emit('message',{type:'inputAck',client:'player',ack:12,ackTick:29,serverTick:30,generation:1,epoch:1});assert.equal(peer.sent.at(-1).value.type,'input-ack');assert.equal(peer.sent.at(-1).lane,'state');
@@ -147,4 +147,22 @@ test('fresh state ACK admission and input feedback never depend on reliable bulk
   const count=world.sent.length;peer.emit('message','events',{type:'snapshot-ack',epoch:2,tick:33});assert.equal(world.sent.length,count,'fresh ACKs do not use reliable events');
   peer.sendStatePacket=()=>false;await session.unorderedSnapshot({...snapshot,sharedId:'fresh:2',snapshotTick:33});assert.equal(world.sent.filter(m=>m.type==='snapshotSent').length,1,'failed native admission cannot authorize a baseline');
  }finally{session.close();}
+});
+
+
+test('fresh initial join admits only after all reliable fragments and cannot repeat',async()=>{
+ const peer=new EventEmitter();peer.remote={capabilities:['fresh-state-v1']};peer.send=()=>true;
+ let accepted=0,blocked=true;peer.sendBinary=()=>{if(blocked&&accepted===1)return false;accepted++;return true;};peer.close=()=>peer.emit('closed');
+ const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
+ try {
+  const initial={type:'journalPacket',client:'player',reliable:true,initialBootstrap:true,snapshotEpoch:1,snapshotTick:3,buffer:randomBytes(50000),sharedId:'join'};
+  world.emit('message',initial);
+  for(let n=0;n<100&&session.draining;n++)await new Promise(r=>setTimeout(r,2));
+  assert.equal(accepted,1);assert(!world.sent.some(m=>m.type==='snapshotSent'));
+  blocked=false;await drained(session);
+  assert.deepEqual(world.sent.at(-1),{type:'snapshotSent',client:'player',epoch:1,tick:3,initialBootstrap:true});
+  const sent=accepted;world.emit('message',initial);await drained(session);assert.equal(accepted,sent);
+  const recovery=[];session.unorderedSnapshot=m=>recovery.push(m);
+  world.emit('message',{...initial,initialBootstrap:false,snapshotEpoch:2});assert.equal(recovery.length,1);
+ } finally {session.close();}
 });

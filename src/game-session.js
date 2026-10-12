@@ -32,7 +32,7 @@ export class GameSession {
       if(m.type==='snapshotFault')peer.close(m.reason);
       else if(m.type==='journalTransients')this.unorderedSnapshot(m,TRANSIENTS_MAGIC,'transientVersion');
       else if(m.type==='journalEvents')this.packet(m.buffer,undefined,m.sharedId,EVENTS_MAGIC);
-      else if(m.type==='journalPacket'){if(m.reliable&&!this.fresh)this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC);else this.unorderedSnapshot(m);}
+      else if(m.type==='journalPacket'){if(m.reliable&&(!this.fresh||m.initialBootstrap&&!this.joinBootstrapQueued)){if(this.fresh)this.joinBootstrapQueued=true;this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC,this.fresh?{epoch:m.snapshotEpoch,tick:m.snapshotTick,initialBootstrap:true}:undefined);}else if(!m.initialBootstrap)this.unorderedSnapshot(m);}
       else if (m.type === 'packet') {
         if (this.awaitKeyframe && !m.keyframe) return;
         if (m.keyframe) this.awaitKeyframe = false;
@@ -121,12 +121,12 @@ export class GameSession {
       if(accepted){this.transportCounters[counter+'Groups']++;this.transportCounters[counter+'Bytes']+=frames.reduce((n,frame)=>n+frame.length,0);if(this.fresh&&magic===JOURNAL_MAGIC)this.world.postMessage({type:'snapshotSent',client:this.id,epoch:m.snapshotEpoch,tick:m.snapshotTick});}else this.transportCounters[counter+'Dropped']++;
     }catch{this.peer.close('snapshot-compression-error');}
   }
-  packet(buffer, metadata, sharedId, magic) {
+  packet(buffer, metadata, sharedId, magic, admission) {
     if(this.closed)return;
     if(buffer.byteLength>2*1024*1024 || this.rawBytes+this.bytes+buffer.byteLength>4*1024*1024)return this.peer.close('snapshot-memory-limit');
     const promise=compress(this.world,buffer,sharedId);
     promise.catch(()=>{});
-    this.pending.push({promise,metadata,magic,bytes:buffer.byteLength,queuedAt:performance.now(),epoch:this.compressionEpoch});
+    this.pending.push({promise,metadata,magic,admission,bytes:buffer.byteLength,queuedAt:performance.now(),epoch:this.compressionEpoch});
     this.rawBytes+=buffer.byteLength;
     this.drain();
   }
@@ -141,7 +141,7 @@ export class GameSession {
         this.rawBytes-=item.bytes;
         if(this.bytes+data.length>4*1024*1024){this.peer.close('compressed-memory-limit');break;}
         const id=++this.serial,total=Math.ceil(data.length/20000),extra=item.metadata?{metadata:item.metadata}:{};
-        if(this.binary||item.magic){for(let index=0;index<total;index++)this.enqueue({binary:encodeBulkFrame({magic:item.magic,id:id>>>0,index,total,data:data.subarray(index*20000,(index+1)*20000),...(index===0?extra:{})}),payloadBytes:Math.min(20000,data.length-index*20000)});}
+        if(this.binary||item.magic){for(let index=0;index<total;index++)this.enqueue({binary:encodeBulkFrame({magic:item.magic,id:id>>>0,index,total,data:data.subarray(index*20000,(index+1)*20000),...(index===0?extra:{})}),admission:index===total-1?item.admission:undefined,payloadBytes:Math.min(20000,data.length-index*20000)});}
         else if(total===1)this.enqueue({type:'ticks',encoding:'deflate',buffers:[data],...extra});
         else for(let index=0;index<total;index++)this.enqueue({type:'packet',encoding:'deflate',id,index,total,data:data.slice(index*20000,(index+1)*20000),...(index===0?extra:{})});
         this.bytes+=data.length;this.inflight=null;this.flush();
@@ -161,6 +161,7 @@ export class GameSession {
       const message = this.queue[0];
       if (!(message.binary?this.peer.sendBinary(message.binary):this.peer.send('bulk', message))) break;
       this.transportCounters.reliableBytes+=message.binary?.length??Buffer.byteLength(JSON.stringify(message));
+      if(message.admission)this.world.postMessage({type:'snapshotSent',client:this.id,...message.admission});
       this.queue.shift(); this.bytes -= message.payloadBytes ?? message.data?.length ?? message.buffers?.[0]?.length ?? 0;
     }
   }

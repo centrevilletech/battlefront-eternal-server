@@ -62,15 +62,16 @@ try {
         const encoded=new Map();
         for(const recipient of journalRecipients) {
           const state=clients.get(recipient.client);
-          if(state.journalEpoch!==journal.epoch){journal.unpin(recipient.client+':ack');journal.unpin(recipient.client+':pending');state.snapshotAck=null;state.pendingCheckpoint=null;state.checkpoints.clear();state.journalEpoch=journal.epoch;}
+          if(state.journalEpoch!==journal.epoch){journal.unpin(recipient.client+':ack');journal.unpin(recipient.client+':pending');journal.unpin(recipient.client+':join');state.snapshotAck=null;state.pendingCheckpoint=null;state.checkpoints.clear();state.journalEpoch=journal.epoch;}
           if(state.fresh){
             const previousAck=state.fresh.ack,plan=state.fresh.plan(journal.epoch,journal.current.tick,tick=>journal.snapshots.has(tick));
             if(previousAck&&!state.fresh.ack)journal.unpin(recipient.client+':ack');
             state.snapshotAck=state.fresh.ack;
             if(!plan)continue;
-            const key=`fresh:${journal.epoch}:${journal.current.tick}:${plan.baseTick}:${state.relativeSnapshots}`;
+            if(plan.initialBootstrap&&!journal.pin(recipient.client+':join',journal.current.tick)){parentPort.postMessage({type:'snapshotFault',reason:'snapshot-memory-limit',client:recipient.client});continue;}
+            const key=`fresh:${journal.epoch}:${journal.current.tick}:${plan.baseTick}:${!!plan.initialBootstrap}:${state.relativeSnapshots}`;
             let batch=encoded.get(key);
-            if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick:plan.baseTick,checkpoint:true,relativeVectors:state.relativeSnapshots}),reliable:false,snapshotEpoch:journal.epoch,snapshotTick:journal.current.tick,capturedAtUnixMs,recipients:[]});
+            if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick:plan.baseTick,checkpoint:true,relativeVectors:state.relativeSnapshots}),reliable:!!plan.initialBootstrap,initialBootstrap:!!plan.initialBootstrap,snapshotEpoch:journal.epoch,snapshotTick:journal.current.tick,capturedAtUnixMs,recipients:[]});
             batch.recipients.push(recipient);if(plan.baseTick===null)measurements.journalBootstraps++;
             continue;
           }
@@ -120,16 +121,16 @@ try {
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
         clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
-      } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
-      else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick);}
+      } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
+      else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick,m.initialBootstrap===true);}
       else if(m.type==='snapshotAck') {
         const state=clients.get(m.client),pending=state?.pendingCheckpoint;
-        if(state?.fresh){if(state.fresh.acknowledge(m.epoch,m.tick,tick=>journal?.epoch===m.epoch&&journal.pin(m.client+':ack',tick)))state.snapshotAck=state.fresh.ack;return;}
+        if(state?.fresh){if(state.fresh.acknowledge(m.epoch,m.tick,tick=>journal?.epoch===m.epoch&&journal.pin(m.client+':ack',tick))){state.snapshotAck=state.fresh.ack;journal.unpin(m.client+':join');}return;}
         if(state?.journal&&pending?.epoch===m.epoch&&pending?.tick===m.tick&&journal?.epoch===m.epoch&&journal.snapshots.has(m.tick)){
           if(!journal.pin(m.client+':ack',m.tick))return;journal.unpin(m.client+':pending');state.pendingCheckpoint=null;state.snapshotAck={epoch:m.epoch,tick:m.tick};
         }
       }
-      else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');state.snapshotAck=null;state.pendingCheckpoint=null;state.bootstrapAt=0;state.fresh?.reset(journal?.epoch??null);}}
+      else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');state.snapshotAck=null;state.pendingCheckpoint=null;state.bootstrapAt=0;state.fresh?.reset(journal?.epoch??null);}}
       else if(m.type==='actions'){if(clients.get(m.client)?.started)world.actions?.(m.client,m.envelope);}
       else if(m.type==='fire'){const state=clients.get(m.client),accepted=Boolean(state?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;if(state){state.fireDiagnostics[accepted?'accepted':'rejected']++;state.fireDiagnostics.last={id:m.edge.id,tick:m.edge.tick,generation:m.edge.generation,button:m.edge.button,pressed:m.edge.pressed,viewTick:m.edge.viewTick,serverTick:game.worldClock.tick,accepted};}parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
       else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
