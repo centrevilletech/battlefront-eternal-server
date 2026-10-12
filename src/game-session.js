@@ -117,15 +117,16 @@ export class GameSession {
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
   entityPacket(m) {
     if(!this.entity||this.closed)return;
-    if(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250){this.transportCounters.stateDropped++;return;}
+    const ageMs=Number.isFinite(m.capturedAtUnixMs)?Date.now()-m.capturedAtUnixMs:undefined;const rejected=reason=>{if(m.sessionIncarnation!==undefined)this.world.postMessage({type:'entityRejected',client:this.id,sessionIncarnation:m.sessionIncarnation,ownCorrection:!!m.ownCorrection,ageMs,reason});};
+    if(ageMs>250){this.transportCounters.stateDropped++;rejected('ownDroppedAge');return;}
     const bytes=Buffer.from(m.buffer);
     if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
-    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>0){this.transportCounters.stateDropped++;return;} }
+    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>0){this.transportCounters.stateDropped++;rejected('ownDroppedBuffered');return;} }
     catch { this.peer.close('channel-state-send-failed');return; }
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
-    if(!accepted){this.transportCounters.stateDropped++;return;}
+    if(!accepted){this.transportCounters.stateDropped++;rejected('ownDroppedNative');return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
-    this.world.postMessage({type:'entitySent',client:this.id,...(m.sessionIncarnation===undefined?{}:{sessionIncarnation:m.sessionIncarnation}),epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
+    this.world.postMessage({type:'entitySent',client:this.id,...(m.sessionIncarnation===undefined?{}:{sessionIncarnation:m.sessionIncarnation,ageMs}),epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
   }
   async unorderedSnapshot(m,magic=JOURNAL_MAGIC,versionSlot='snapshotVersion') {
     const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);

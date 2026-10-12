@@ -58,3 +58,6 @@ test('batched independent input ACKs expose only each authenticated recipient an
  assert.equal(peer.sent.length,2);assert.equal(peer.sent[0].m.ack,4);assert.equal(peer.sent[0].m.type,'input-ack');assert.equal(peer.sent[0].m.recipients,undefined);assert.equal(peer.sent[0].m.edgeFeedback,undefined);assert.equal(peer.sent[0].m.inputAckBatchId,undefined);assert.deepEqual(peer.sent[1].m.received,[3]);assert.equal(peer.sent[1].m.type,'entity-edge-results');
  }finally{session.close();}
 });
+test('publication diagnostics distinguish existing stale-age and successful native admission',()=>{const {peer,world,session}=setup();try{const buffer=Buffer.alloc(30);buffer.writeUInt32LE(0x31454e42);world.emit('message',{type:'entityPacket',client:'player',epoch:1,packetId:1,sessionIncarnation:3,ownCorrection:true,capturedAtUnixMs:Date.now()-1000,buffer});assert.equal(world.sent.at(-1).type,'entityRejected');assert.equal(world.sent.at(-1).reason,'ownDroppedAge');assert.equal(world.sent.at(-1).sessionIncarnation,3);
+ world.emit('message',{type:'entityPacket',client:'player',epoch:1,packetId:2,sessionIncarnation:3,ownCorrection:true,capturedAtUnixMs:Date.now(),buffer});assert.equal(world.sent.at(-1).type,'entitySent');assert.equal(world.sent.at(-1).sessionIncarnation,3);assert(world.sent.at(-1).ageMs<250);
+ }finally{session.close();}});

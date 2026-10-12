@@ -83,6 +83,7 @@ try {
             if(vehicle?.quaternion){const {x,y,z,w}=vehicle.quaternion;forward=[2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)];}
             else if(soldier){const yaw=soldier.aimYaw,pitch=soldier.aimPitch,c=Math.cos(pitch);forward=[Math.sin(yaw)*c,Math.sin(pitch),Math.cos(yaw)*c];}
             const interest={position,velocity,forward,flying:!!vehicle?.flying};
+            if(publication&&combatFaults.length)parentPort.postMessage({type:'entityDiagnostics',client,actors:combatFaults.map(message=>({id:0,message:String(message).slice(0,160)}))});
             if(publication){
               publicationRecipients.push({client,sessionIncarnation:state.publicationIncarnation,spectator:!!actor.spectator,unitId:actor.unit?.id,interest,summaries:entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false,eligibilityCache}),own:actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1}),fields:{ackInput:actor.mailbox.ack,ackActions:0,ackFire:0}});
               continue;
@@ -236,7 +237,8 @@ try {
         acknowledgeEntityPackets({client:m.client,state,publication,epoch:packet.epoch,packetIds:packet.receipts});
       }
       else if(m.type==='entityEdgeAck'){clients.get(m.client)?.entityEdges?.acknowledge(m);}
-      else if(m.type==='entitySent'){const state=clients.get(m.client);if(publication){publication.receipt('admitted',m);if(state){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}else if(m.epoch===1&&state?.entity?.admitted(m.packetId)){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}
+      else if(m.type==='entityRejected')publication?.packetResult(m);
+      else if(m.type==='entitySent'){const state=clients.get(m.client);if(publication){publication.packetResult(m);publication.receipt('admitted',m);if(state){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}else if(m.epoch===1&&state?.entity?.admitted(m.packetId)){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}
       else if(m.type==='entityAck')acknowledgeEntityPackets({client:m.client,state:clients.get(m.client),publication,epoch:m.epoch,packetIds:[m.packetId]});
       else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick,m.initialBootstrap===true);}
       else if(m.type==='snapshotAck') {
