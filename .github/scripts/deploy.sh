@@ -11,7 +11,21 @@ api() { curl --fail-with-body --silent --show-error --max-time 300 -H "X-API-Key
 base="${PORTAINER_URL%/}/api"
 stack="$(api "$base/stacks" | jq -e --arg name "$STACK_NAME" --argjson endpoint "$PORTAINER_ENDPOINT_ID" '[.[]|select(.Name==$name and .EndpointId==$endpoint)] | if length==1 then .[0] else error("Expected existing match server stack") end')"
 id="$(jq -r '.Id' <<< "$stack")"
+current="$(api "$base/endpoints/$PORTAINER_ENDPOINT_ID/docker/containers/$STACK_NAME/json")"
+current_image="$(jq -r '.Config.Image // ""' <<< "$current")"
 file="$(api "$base/stacks/$id/file" | jq -r '.StackFileContent')"
+engine_source="$(jq -r '.Mounts[] | select(.Destination=="/engine") | .Source' <<< "$current")"
+if [[ "${FORCE_DEPLOY:-false}" != true ]] &&
+   jq -e --arg stackId "$id" -f .github/scripts/reusable-runtime.jq <<< "$current" >/dev/null &&
+   [[ "$file" == *"$engine_source:/engine:ro"* ]] &&
+   [[ "$current_image" =~ ^ghcr.io/joshualambert/battlefront-eternal-server:sha-([a-f0-9]{40})$ ]]; then
+  if bash .github/scripts/runtime-changed.sh "${BASH_REMATCH[1]}"; then
+    : # A runtime change needs the ordinary deployment below.
+  else
+    echo "Healthy deployed runtime is unchanged; preserving the active match"
+    exit 0
+  fi
+fi
 # Update the image and the authorized two-core budget, preserving private mounts.
 file="$(jq -enr --arg file "$file" --arg image "$APP_IMAGE" '
   "ghcr.io/joshualambert/battlefront-eternal-server:sha-[a-f0-9]+" as $pattern |

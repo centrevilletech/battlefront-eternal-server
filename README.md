@@ -46,6 +46,10 @@ required by the server.
 The Compose example and Aldine production deployment allocate two CPU cores and
 1 GiB of memory to the game server. CI enforces that production budget while
 preserving the operator's engine and game-data mounts.
+CI still builds and tests documentation and harness changes, but deployment keeps
+a healthy active match when runtime inputs match its pinned image commit. It also
+checks the stack identity, private mounts and resource budget before skipping.
+A manual workflow run forces deployment, including a base-image refresh.
 
 Finished matches advance the configured playlist and reload connected clients
 into a new authoritative world. The same persistent server identity is retained.

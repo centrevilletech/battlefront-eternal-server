@@ -49,9 +49,12 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: bash .github/scripts/deploy.sh
         env:
           PORTAINER_URL: ${{ secrets.PORTAINER_URL }}
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
           PORTAINER_ENDPOINT_ID: ${{ secrets.PORTAINER_ENDPOINT_ID }}
           APP_IMAGE: ghcr.io/joshualambert/battlefront-eternal-server:sha-${{ github.sha }}
+          FORCE_DEPLOY: ${{ github.event_name == 'workflow_dispatch' }}
