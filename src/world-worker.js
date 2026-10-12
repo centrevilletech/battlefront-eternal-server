@@ -97,7 +97,7 @@ try {
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
+        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
       else if(m.type==='snapshotAck') {
@@ -108,7 +108,7 @@ try {
       }
       else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');state.snapshotAck=null;state.pendingCheckpoint=null;state.bootstrapAt=0;}}
       else if(m.type==='actions'){if(clients.get(m.client)?.started)world.actions?.(m.client,m.envelope);}
-      else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
+      else if(m.type==='fire'){const state=clients.get(m.client),accepted=Boolean(state?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;if(state){state.fireDiagnostics[accepted?'accepted':'rejected']++;state.fireDiagnostics.last={id:m.edge.id,tick:m.edge.tick,generation:m.edge.generation,button:m.edge.button,pressed:m.edge.pressed,viewTick:m.edge.viewTick,serverTick:game.worldClock.tick,accepted};}parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
       else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
       else if (m.type === 'chat') {
         const sender = world.player(m.client);
@@ -135,7 +135,10 @@ try {
         else if (m.method === 'suspend') { clients.get(m.client).started = false; world.clearInput?.(m.client); updateLinear(); result.type = 'suspended'; }
         else if (m.method === 'resync') { clients.get(m.client) && (clients.get(m.client).keyframe = true); }
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
-        else if (m.method === 'inspect') result = { ...result, type: 'inspection', player:{...player,aimYaw:world.players.get(m.client)?.unit?.soldier?.aimYaw,aimPitch:world.players.get(m.client)?.unit?.soldier?.aimPitch}, inputDiagnostics:clients.get(m.client).inputDiagnostics, players: clients.size, running: Boolean(timer) };
+        else if (m.method === 'inspect') {
+          const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
+          result = { ...result, type: 'inspection', player:{...player,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
+        }
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
         for (let i = 0; i < Math.min(m.count ?? 1, 600); i++) step();
