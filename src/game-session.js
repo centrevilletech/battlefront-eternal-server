@@ -46,7 +46,9 @@ export class GameSession {
     peer.on('binary',(buffer,label)=>{
       if(!this.entity||label!=='state'||this.closed)return;
       const bytes=Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
-      const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;}if(++this.entityInputCount>120)return peer.close('entity-input-flood');
+      const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
+      this.entityInputTimes.push(now-this.entityInputWindow);
+      if(++this.entityInputCount>120){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
       this.world.postMessage({type:'entityInput',client:this.id,buffer:bytes});
     });
     peer.once('closed', () => this.close());
