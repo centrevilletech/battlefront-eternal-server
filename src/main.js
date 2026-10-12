@@ -123,10 +123,23 @@ async function serve() {
     tick = 0,
     error = null;
   const operator = new OperatorStore(directory);
+  const metricsEnabled=process.env.BFE_WORLD_METRICS==='1';let metricsBusy=false;
   const admin = operatorHandler(directory, async command => {
     if(command.action==='status')return {status,tick,pid:process.pid,startedAt,bans:operator.bans(),players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
     if(command.action==='stop'){setTimeout(()=>shutdown(),50);return {ok:true};}
     if(command.action==='stats')return {players:operator.stats(command.id)};
+    if(command.action==='metrics'||command.action==='reset-metrics'){
+      if(!metricsEnabled||!world||status!=='running')throw Error('World metrics are not enabled');
+      if(metricsBusy)throw Error('World metrics request already pending');
+      metricsBusy=true;const target=world,type=command.action==='metrics'?'metrics':'metricsReset';
+      return new Promise((resolve,reject)=>{
+        const cleanup=()=>{clearTimeout(timeout);target.off('message',receive);target.off('exit',exited);metricsBusy=false;};
+        const receive=m=>{if(m.type===type){cleanup();resolve(m);}};
+        const exited=()=>{cleanup();reject(Error('World changed during metrics request'));};
+        const timeout=setTimeout(()=>{cleanup();reject(Error('World metrics timed out'));},8000);
+        target.on('message',receive);target.once('exit',exited);target.postMessage({type:command.action==='metrics'?'metrics':'resetMetrics'});
+      });
+    }
     if(command.action==='unban'){operator.unban(command.id);return {ok:true};}
     if(command.action==='ban')operator.ban(command.id,command.hours,command.reason);
     else if(command.action==='kick'){if(!/^[a-f0-9]{64}$/.test(command.id??''))throw Error('Invalid identity');operator.audit('kick',command.id,command.reason);}
@@ -170,6 +183,8 @@ async function serve() {
         query,
         maxPlayers: config.maxPlayers ?? 64,
         armySize:32,
+        metrics:metricsEnabled,
+        ...(metricsEnabled&&process.env.BFE_WORLD_PROFILE?{profile:resolve(process.env.BFE_WORLD_PROFILE)}:{}),
       },
     });
     status = "loading";

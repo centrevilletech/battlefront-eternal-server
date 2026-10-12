@@ -173,7 +173,7 @@ try {
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
     try {
-      if(m.type==='resetMetrics'){threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;}
+      if(m.type==='resetMetrics'){if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
         Object.assign(m,{entity:true,journal:true,fresh:true,compactMetadata:true,linearProjectiles:true,separateActions:true,relativeSnapshots:false,transientSnapshots:false});

@@ -107,3 +107,10 @@ walker correction are unsupported, and complete effects/gameplay parity and
 64-player latency, coverage and bandwidth qualification remain outstanding.
 Historical load scripts and transport reports describe retired protocols; use
 the private engine's current Chromium/netem harness for matched protocol-2 tests.
+
+Local operator profiling is disabled by default. Start with
+`BFE_WORLD_METRICS=1` and optionally `BFE_WORLD_PROFILE=/tmp/world.cpuprofile`.
+Authenticated loopback admin actions `reset-metrics` and `metrics` delimit the
+measurement window and return bounded simulation/publication samples and worker
+CPU usage. Reading metrics writes the configured V8 profile. Remote gameplay
+peers cannot enable profiling or choose output paths.
