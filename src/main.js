@@ -191,7 +191,7 @@ async function serve() {
     });
     status = "loading";
     world.on("message", async (m) => {
-      if(m.type==='inputAck'&&m.inputAckBatchId){world.postMessage({type:'inputAckBatchProcessed',inputAckBatchId:m.inputAckBatchId});}
+      if(m.type==='inputAck'&&m.inputAckBatchId){queueMicrotask(()=>world.postMessage({type:'inputAckBatchProcessed',inputAckBatchId:m.inputAckBatchId}));}
       else if(m.type==='publicationBatchDone'){world.postMessage({...m,type:'publicationBatchProcessed'});}
       else if(m.type==='publicationFatal'){status='fault';error=m.message;await online?.close();await local?.close();await world.terminate();}
       else if (m.type === "ready") {

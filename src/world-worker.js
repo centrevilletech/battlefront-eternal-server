@@ -70,7 +70,7 @@ try {
     for (const [client, state] of clients) if (state.started) {
       if(state.fresh){const actor=world.players.get(client);if(actor)(inputAcks?message=>inputAckRecipients.push(message):message=>parentPort.postMessage(message))({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
-        const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
+        const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length){const ack=inputAcks&&inputAckRecipients.find(message=>message.client===client);if(ack)ack.edgeFeedback=feedback;else parentPort.postMessage({type:'entityEdgeResults',client,...feedback});}
         if(state.entityReady){
           try {
             semanticRecords??=entityCapture.capture(game.worldClock.tick).map(publication?r=>r:entityRuntime.prepareEntityRecord);
