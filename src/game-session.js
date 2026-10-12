@@ -55,9 +55,9 @@ export class GameSession {
       parentCount('inputCallbacks');parentCount('inputBytes',buffer.byteLength);
       const bytes=Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
       const now=this.inputClock();if(this.entityInputWindow===undefined||now-this.entityInputWindow>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
-      this.entityInputTimes.push(now-this.entityInputWindow);
+      this.entityInputTimes.push(now-this.entityInputWindow);if(this.entityInputTimes.length>121)this.entityInputTimes.shift();
       this.entityInputCount++;
-      if(!this.inputAdmission.take()){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
+      if(!this.inputAdmission.take()){this.entityInputDropped=(this.entityInputDropped??0)+1;parentCount('inputDroppedAdmission');return;}
       this.post({type:'entityInput',client:this.id,buffer:bytes});
     });
     peer.once('closed', () => this.close());
@@ -122,7 +122,7 @@ export class GameSession {
   allowResync() {const now=performance.now();if(now-(this.lastResync??-Infinity)<1000)return false;this.lastResync=now;return true;}
   transportDiagnostics() {
     const oldest=Math.min(this.queue[0]?.queuedAt??Infinity,this.pending[0]?.queuedAt??Infinity,this.inflight?.queuedAt??Infinity);
-    return {...this.transportCounters,queuedReliableBytes:this.bytes+this.rawBytes,reliableAgeMs:Number.isFinite(oldest)?Math.max(0,performance.now()-oldest):0,bulkBuffered:this.peer.channels?.get('bulk')?.bufferedAmount()??0,stateBuffered:this.peer.channels?.get('state')?.bufferedAmount()??0};
+    return {...this.transportCounters,inputDroppedAdmission:this.entityInputDropped??0,queuedReliableBytes:this.bytes+this.rawBytes,reliableAgeMs:Number.isFinite(oldest)?Math.max(0,performance.now()-oldest):0,bulkBuffered:this.peer.channels?.get('bulk')?.bufferedAmount()??0,stateBuffered:this.peer.channels?.get('state')?.bufferedAmount()??0};
   }
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
   entityPacket(m) {
