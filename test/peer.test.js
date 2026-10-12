@@ -48,3 +48,12 @@ test(
     assert.equal((await delivered).text, "hello");
   },
 );
+
+test('native buffered sends are accepted once and complete state groups cross the soft limit',()=>{
+ const sent=[];let buffered=0;const ch={isOpen:()=>true,bufferedAmount:()=>buffered,sendMessage:value=>{sent.push(value);return false;},sendMessageBinary:value=>{sent.push(value);buffered+=value.length;return false;}};
+ const peer=Object.create(Peer.prototype);peer.authenticated=true;peer.sequence=0;peer.stateBufferLimit=1024;peer.channels=new Map([['events',ch],['bulk',ch],['state',ch]]);
+ assert.equal(peer.send('events',{type:'test'}),true);assert.equal(sent.length,1);
+ assert.equal(peer.sendBinary(Buffer.alloc(100)),true);assert.equal(sent.length,2);
+ assert.equal(peer.sendStatePacket([Buffer.alloc(900),Buffer.alloc(900),Buffer.alloc(900)]),true);assert.equal(sent.length,5);
+ assert.equal(peer.sendStatePacket([Buffer.alloc(900)]),false);assert.equal(sent.length,5);
+});

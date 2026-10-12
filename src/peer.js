@@ -241,12 +241,21 @@ export class Peer extends EventEmitter {
     if (ch.bufferedAmount() > (label==='state'?this.stateBufferLimit:65536)) {
       return false;
     }
-    return ch.sendMessage(data);
+    // Native libdatachannel false means accepted into its send queue.
+    ch.sendMessage(data);return true;
   }
   sendBinary(value,label='bulk') {
     if(!['bulk','state'].includes(label))throw Error('Invalid binary channel');
     const ch=this.channels.get(label);if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>(label==='state'?this.stateBufferLimit:65536))return false;
-    if(value.byteLength>32768)throw Error('binary message too large');return ch.sendMessageBinary(Buffer.from(value));
+    if(value.byteLength>32768)throw Error('binary message too large');ch.sendMessageBinary(Buffer.from(value));return true;
+  }
+  sendStatePacket(frames) {
+    const ch=this.channels.get('state');
+    if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>this.stateBufferLimit)return false;
+    if(!Array.isArray(frames)||!frames.length||frames.length>128||frames.some(frame=>frame.byteLength>32768)||frames.reduce((n,frame)=>n+frame.byteLength,0)>2*1024*1024)throw Error('Invalid state packet group');
+    // Admit a complete bounded snapshot, then apply backpressure to later ones.
+    for(const frame of frames)ch.sendMessageBinary(Buffer.from(frame));
+    return true;
   }
   path() {
     const pair = this.pc.getSelectedCandidatePair();
