@@ -52,7 +52,7 @@ try {
   const sendParent=(message,transfer)=>{if(workerData.publicationWorker){if(message.client&&message.sessionIncarnation===undefined)message={...message,sessionIncarnation:clients.get(message.client)?.publicationIncarnation};if(message.recipients)message={...message,recipients:message.recipients.map(r=>({...r,sessionIncarnation:r.sessionIncarnation??clients.get(r.client)?.publicationIncarnation}))};}parentPort.postMessage(message,transfer);};
   let publicationSession=0;
   const publication=workerData.publicationWorker?new PublicationBridge({engine:root,maxClients:workerData.publicationMaxClients??192,fatal:message=>{clearInterval(timer);inputAcks?.close();sendParent({type:'publicationFatal',message});},send:(message,transfer)=>sendParent(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
-  const inputAcks=publication?new LatestBatch(message=>sendParent(message),{fatal:message=>publication.terminal(message)}):null;
+  const inputAcks=publication?new LatestBatch(message=>sendParent(message),{fatal:message=>publication.terminal(message),onState:status=>sendParent({type:'inputAckStatus',status})}):null;
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
@@ -126,7 +126,7 @@ try {
       if(!group)groups.set(packet.sharedId,group={type:'packet',sharedId:packet.sharedId,buffer:packet.buffer.slice(0),recipients:[]});
       group.recipients.push({client,keyframe,metadata:state.compactMetadata && typeof compactMetadata==='function' ? compactMetadata(packet.metadata) : packet.metadata});
     }
-    if(inputAcks)inputAcks.offer(inputAckRecipients);
+    if(inputAcks)inputAcks.offer(inputAckRecipients,capturedAtUnixMs);
     if(publication)publication.capture({tick:game.worldClock.tick,capturedAtUnixMs,records:semanticRecords??[],summaries:commonSummaries??[],events:[...combatStore.records.values()].map(e=>({record:e.prepared.record,expiresTick:e.expiresTick,retention:e.retention})),recipients:publicationRecipients});
     for(const group of groups.values()) {
       const journalRecipients=group.recipients.filter(r=>clients.get(r.client).journal);
@@ -205,7 +205,8 @@ try {
   parentPort.on('message', async m => {
     try {
       if(publication&&m.client&&!acceptsPublicationCommand(clients,m))return;
-      if(m.type==='inputAckBatchProcessed')inputAcks?.processed(m.inputAckBatchId);
+      if(m.type==='inputAckBatchProcessed')inputAcks?.processed(m.inputAckBatchId,m.inputAckIncarnation);
+      else if(m.type==='inputAckProbeResult')inputAcks?.probeResult(m);
       else if(m.type==='publicationCaptureProcessed')publication?.processed(m);
       else if(m.type==='resetMetrics'){publication?.resetMetrics();if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;sendParent({type:'metricsReset',tick:game.worldClock.tick});}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} sendParent({type:'metrics',publication:publication?.metricsSnapshot(),threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }

@@ -31,3 +31,8 @@ test('duplicate accepted clicks do not fire twice and unknown spawn prerequisite
  assert.equal(calls.length,1);assert.deepEqual(edges.feedback().results.at(-1),{id:2,status:'rejected',tick:12});
  edges.reset(1,3);assert.equal(edges.pending.size,0);assert.deepEqual(edges.feedback().results,[]);
 });
+
+test('latest ACK replacement preserves actual edge outcomes until explicit client receipt',async()=>{
+ const {LatestBatch}=await import('../src/latest-batch.js');const {actor,edges}=setup();const sent=[];const lane=new LatestBatch(m=>sent.push(m),{incarnation:'test'});
+ try{lane.offer([{edgeFeedback:edges.feedback()}]);for(const id of [1,2]){edges.receive({epoch:1,generation:2,edges:[{epoch:1,generation:2,id,tick:10,kind:'action',action:'jump'}]},10);edges.advance(11);actor.actions.outcomes.push({id,status:'consumed'});edges.consumed();lane.offer([{edgeFeedback:edges.feedback()}]);}lane.processed(1,'test');assert.deepEqual(sent[1].recipients[0].edgeFeedback.results.map(r=>r.id),[1,2]);assert.equal(edges.feedback().results.length,2);edges.acknowledge({epoch:1,generation:2,ids:[1]});assert.deepEqual(edges.feedback().results.map(r=>r.id),[2]);}finally{lane.close();}
+});

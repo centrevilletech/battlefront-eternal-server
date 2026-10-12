@@ -42,7 +42,7 @@ export class GameSession {
       else if(m.type==='entityPacket')this.entityPacket(m);
       else if(m.type==='journalPacket'&&m.reliable&&m.initialBootstrap&&!this.joinBootstrapQueued){this.joinBootstrapQueued=true;this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC,{epoch:m.snapshotEpoch,tick:m.snapshotTick,initialBootstrap:true});}
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, binaryBulk:this.binary, ...m.player, playerId: m.player.unitId, tick: m.tick });
-      else if(m.type==='inputAck'){const {edgeFeedback,recipients,inputAckBatchId,...ack}=m;if(this.fresh)peer.send('state',{...ack,type:'input-ack'});if(edgeFeedback)peer.send('state',{type:'entity-edge-results',client:id,...edgeFeedback});}
+      else if(m.type==='inputAck'){const {edgeFeedback,recipients,inputAckBatchId,inputAckIncarnation,capturedAtUnixMs,...ack}=m;if(inputAckBatchId&&(!Number.isFinite(capturedAtUnixMs)||Date.now()-capturedAtUnixMs>250))return;if(this.fresh)peer.send('state',{...ack,type:'input-ack'});if(edgeFeedback)peer.send('state',{type:'entity-edge-results',client:id,...edgeFeedback});}
       else if (m.type === 'fireAck') peer.send('events',m);
       else if (m.type === 'chat') peer.send('events', m);
       else if (m.type === 'reply') { peer.send('events', m.resultType==='inspection'?{...m,transport:this.transportDiagnostics()}:m); if(m.error && m.id === undefined)peer.close('invalid-input'); }
