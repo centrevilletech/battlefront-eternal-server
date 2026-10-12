@@ -184,6 +184,7 @@ async function serve() {
         maxPlayers: config.maxPlayers ?? 64,
         armySize:32,
         metrics:metricsEnabled,
+        publicationWorker:process.env.BFE_PUBLICATION_WORKER==='1',
         ...(metricsEnabled&&process.env.BFE_WORLD_PROFILE?{profile:resolve(process.env.BFE_WORLD_PROFILE)}:{}),
       },
     });
