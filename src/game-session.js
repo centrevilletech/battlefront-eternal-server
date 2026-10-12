@@ -1,3 +1,4 @@
+import {parentDiagnosticsEnabled,parentCount,parentDuration} from './parent-diagnostics.js';
 import {encodeBulkFrame,JOURNAL_MAGIC,EVENTS_MAGIC,TRANSIENTS_MAGIC} from './bulk-frame.js';
 import { deflate } from 'node:zlib';
 import { transportTuning } from './transport-tuning.js';
@@ -47,6 +48,7 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.on('binary',(buffer,label)=>{
       if(!this.entity||label!=='state'||this.closed)return;
+      parentCount('inputCallbacks');parentCount('inputBytes',buffer.byteLength);
       const bytes=Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
       const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
       this.entityInputTimes.push(now-this.entityInputWindow);
@@ -54,7 +56,7 @@ export class GameSession {
       this.post({type:'entityInput',client:this.id,buffer:bytes});
     });
     peer.once('closed', () => this.close());
-    this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
+    this.timer = setInterval(() => {const begun=parentDiagnosticsEnabled?performance.now():0;this.flush();parentDuration('flushTimer',begun);}, 5); this.timer.unref();
     this.post({type:'join',client:id,spectator:peer.spectator,entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
   }
   post(message){this.world.postMessage(this.publicationIncarnation===undefined?message:{...message,publicationIncarnation:this.publicationIncarnation});}

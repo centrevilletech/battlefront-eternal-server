@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {startParentDiagnostics,parentCount} from './parent-diagnostics.js';
 import {returnProcessingCredit} from './processing-credit.js';
 import {PublicationCoordinator} from './publication-coordinator.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -118,6 +119,7 @@ async function adminMenu(io) {
   if(request)try{console.log(JSON.stringify(await operatorRequest(directory,request),null,2));}catch(e){console.error('Administration:',e.message);}
 }
 async function serve() {
+  startParentDiagnostics();
   let online = null, local = null, stopping = false, rotationTimer = null;
   const startedAt = Date.now();
   let world = null,
@@ -195,6 +197,7 @@ async function serve() {
     const matchWorld=world;let publication;
     matchWorld.once('exit',()=>publication?.close());
     world.on("message", async (m) => {
+      parentCount("world:"+m.type);
       if(m.type==='publicationCapture'){const controls=m.controls.filter(c=>matchWorld.publicationSessions?.get(c.client)?.publicationIncarnation===c.incarnation),active=new Set(controls.map(c=>c.client));for(const id of publication.clients.keys())if(!active.has(id))publication.leave(id);for(const c of controls){if(publication.clients.get(c.client)?.incarnation!==c.incarnation)publication.join(c.client,c.incarnation);for(const receipt of c.acks)publication.receipt('acks',receipt);}publication.capture({...m.capture,recipients:m.capture.recipients.filter(r=>active.has(r.client)&&matchWorld.publicationSessions.get(r.client).publicationIncarnation===r.sessionIncarnation)});matchWorld.postMessage({type:'publicationCaptureProcessed',id:m.id});}
       else if(m.type==='metrics'&&publication){m.publication={...publication.metricsSnapshot(),bridge:m.publication};}
       else if(m.type==='metricsReset')publication?.resetMetrics();

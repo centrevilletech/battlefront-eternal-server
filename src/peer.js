@@ -1,3 +1,4 @@
+import {parentDiagnosticsEnabled,parentDuration} from './parent-diagnostics.js';
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 import { PortablePeerConnection } from "./portable-rtc.js";
@@ -235,6 +236,7 @@ export class Peer extends EventEmitter {
   transmit(label, maxBuffered, write) {
     if (!this.authenticated || this.closed) return false;
     const ch = this.channels.get(label);
+    const begun=parentDiagnosticsEnabled?performance.now():0;
     try {
       if (!ch?.isOpen() || ch.bufferedAmount() > maxBuffered) return false;
       // A channel may close between the native readiness check and send.
@@ -244,7 +246,7 @@ export class Peer extends EventEmitter {
     } catch {
       this.close(`channel-${label}-send-failed`);
       return false;
-    }
+    } finally {parentDuration('nativeTransmit:'+label,begun);}
   }
   send(label, value) {
     if (!this.authenticated || this.closed) return false;
