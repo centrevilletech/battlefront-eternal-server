@@ -19,9 +19,9 @@ if [[ "${FORCE_DEPLOY:-false}" != true ]] &&
    jq -e --arg stackId "$id" -f .github/scripts/reusable-runtime.jq <<< "$current" >/dev/null &&
    [[ "$file" == *"$engine_source:/engine:ro"* ]] &&
    [[ "$current_image" =~ ^ghcr.io/joshualambert/battlefront-eternal-server:sha-([a-f0-9]{40})$ ]]; then
-  if bash .github/scripts/runtime-changed.sh "${BASH_REMATCH[1]}"; then
-    : # A runtime change needs the ordinary deployment below.
-  else
+  change_status=0
+  bash .github/scripts/runtime-changed.sh "${BASH_REMATCH[1]}" || change_status=$?
+  if [[ "$change_status" == 1 ]]; then
     echo "Healthy deployed runtime is unchanged; preserving the active match"
     exit 0
   fi
