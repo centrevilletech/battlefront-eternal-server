@@ -19,6 +19,7 @@ try {
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
   let Journal;
   try { ({SnapshotJournal:Journal}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-journal.js')))); } catch {}
+  if(typeof Journal?.prototype.pin!=='function'||typeof Journal?.prototype.unpin!=='function')Journal=null;
   let journal,lastJournalId,eventSerial=0;
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   let profiler;
@@ -26,7 +27,7 @@ try {
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
   const updateLinear=()=>updateRoomCapabilities(world,clients);
   let threadCpuStart=process.threadCpuUsage();
-  const measurements = {sim:[],encode:[],total:[],droppedTicks:0,fireAccepted:0,fireRejected:0};
+  const measurements = {sim:[],encode:[],total:[],droppedTicks:0,fireAccepted:0,fireRejected:0,journalBootstraps:0,journalCheckpointPackets:0};
   const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
   const publish = () => {
     const begun=performance.now();
@@ -49,18 +50,20 @@ try {
         }
         const encoded=new Map();
         for(const recipient of journalRecipients) {
-          const state=clients.get(recipient.client),ack=state.snapshotAck;
+          const state=clients.get(recipient.client);
+          if(state.journalEpoch!==journal.epoch){journal.unpin(recipient.client+':ack');journal.unpin(recipient.client+':pending');state.snapshotAck=null;state.pendingCheckpoint=null;state.checkpoints.clear();state.journalEpoch=journal.epoch;}
+          const ack=state.snapshotAck;
           let baseTick=ack?.epoch===journal.epoch && journal.snapshots.has(ack.tick)?ack.tick:null;
           if(baseTick===journal.current.tick)continue;
           const reliable=baseTick===null,now=performance.now();
-          if(reliable&&state.bootstrapEpoch===journal.epoch&&now-(state.bootstrapAt??0)<1000)continue;
-          const checkpoint=reliable||journal.current.tick%15===0;
+          if(reliable&&state.pendingCheckpoint?.epoch===journal.epoch)continue;
+          const checkpoint=reliable||!state.pendingCheckpoint&&journal.current.tick%15===0;
           const key=`journal:${journal.epoch}:${journal.current.tick}:${baseTick}:${checkpoint}:${state.relativeSnapshots}`;
           let batch=encoded.get(key);
-          if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick,checkpoint,relativeVectors:state.relativeSnapshots}),reliable,recipients:[]});
+          if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick,checkpoint,relativeVectors:state.relativeSnapshots}),reliable:checkpoint,recipients:[]});
           batch.recipients.push(recipient);
-          if(checkpoint){state.checkpoints.set(journal.current.tick,journal.epoch);while(state.checkpoints.size>16)state.checkpoints.delete(state.checkpoints.keys().next().value);}
-          if(reliable){state.bootstrapAt=now;state.bootstrapEpoch=journal.epoch;}
+          if(checkpoint){measurements.journalCheckpointPackets++;journal.pin(recipient.client+':pending',journal.current.tick);state.pendingCheckpoint={epoch:journal.epoch,tick:journal.current.tick};state.checkpoints.set(journal.current.tick,journal.epoch);while(state.checkpoints.size>16)state.checkpoints.delete(state.checkpoints.keys().next().value);}
+          if(reliable){measurements.journalBootstraps++;state.bootstrapAt=now;state.bootstrapEpoch=journal.epoch;}
         }
         for(const batch of encoded.values())parentPort.postMessage(batch,[batch.buffer]);
       }
@@ -86,11 +89,16 @@ try {
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,relativeSnapshots:m.relativeSnapshots===true,checkpoints:new Map() });
+        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,relativeSnapshots:m.relativeSnapshots===true,checkpoints:new Map(),inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:'journal-v1'}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
-      } else if (m.type === 'leave') { report(); clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
-      else if(m.type==='snapshotAck') {const state=clients.get(m.client);if(state?.journal&&state.checkpoints.get(m.tick)===m.epoch&&(!state.snapshotAck||m.epoch>state.snapshotAck.epoch||m.epoch===state.snapshotAck.epoch&&m.tick>state.snapshotAck.tick))state.snapshotAck={epoch:m.epoch,tick:m.tick};}
-      else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){state.snapshotAck=null;state.bootstrapAt=0;}}
+      } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
+      else if(m.type==='snapshotAck') {
+        const state=clients.get(m.client),pending=state?.pendingCheckpoint;
+        if(state?.journal&&pending?.epoch===m.epoch&&pending?.tick===m.tick&&journal?.epoch===m.epoch&&journal.snapshots.has(m.tick)){
+          if(!journal.pin(m.client+':ack',m.tick))return;journal.unpin(m.client+':pending');state.pendingCheckpoint=null;state.snapshotAck={epoch:m.epoch,tick:m.tick};
+        }
+      }
+      else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');state.snapshotAck=null;state.pendingCheckpoint=null;state.bootstrapAt=0;}}
       else if(m.type==='actions'){if(clients.get(m.client)?.started)world.actions?.(m.client,m.envelope);}
       else if(m.type==='fire'){const accepted=Boolean(clients.get(m.client)?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
       else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
@@ -103,7 +111,12 @@ try {
         }
       } else if (m.type === 'inputs') {
         if (!clients.get(m.client)?.started) return;
-        for (const command of m.commands.slice(0,32)) world.input(m.client, command);
+        for (const command of m.commands.slice(0,32)) {
+          const stats=clients.get(m.client).inputDiagnostics,accepted=world.input(m.client,command);
+          stats[accepted?'accepted':'rejected']++;
+          stats.last.sequence=command?.sequence;stats.last.tick=command?.tick;stats.last.generation=command?.generation;stats.last.epoch=command?.epoch;stats.last.serverTick=game.worldClock.tick;stats.last.accepted=accepted;
+          if(!accepted){const reason=!command?'missing-command':Math.abs(command.tick-game.worldClock.tick)>120?'tick-window':command.epoch!==1?'epoch':'sequence-or-inactive';stats.reasons[reason]=(stats.reasons[reason]??0)+1;}
+        }
       } else if (m.type === 'resync') clients.get(m.client) && (clients.get(m.client).keyframe = true);
       else if (m.type === 'call') {
         if (!clients.has(m.client)) throw Error('not joined');
@@ -114,7 +127,7 @@ try {
         else if (m.method === 'suspend') { clients.get(m.client).started = false; world.clearInput?.(m.client); updateLinear(); result.type = 'suspended'; }
         else if (m.method === 'resync') { clients.get(m.client) && (clients.get(m.client).keyframe = true); }
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
-        else if (m.method === 'inspect') result = { ...result, type: 'inspection', player, players: clients.size, running: Boolean(timer) };
+        else if (m.method === 'inspect') result = { ...result, type: 'inspection', player, inputDiagnostics:clients.get(m.client).inputDiagnostics, players: clients.size, running: Boolean(timer) };
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
         for (let i = 0; i < Math.min(m.count ?? 1, 600); i++) step();

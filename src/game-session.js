@@ -97,7 +97,8 @@ export class GameSession {
       const compressed=await compress(this.world,m.buffer,m.sharedId);
       if(this.closed||version!==this.snapshotVersion)return;
       const data=compressed.buffer,id=++this.serial,size=Math.max(256,Math.ceil(data.length/128),this.journalFrameBytes-Buffer.byteLength(JSON.stringify(m.metadata??{}))-16),total=Math.ceil(data.length/size);
-      for(let index=0;index<total;index++)if(!this.peer.sendBinary(encodeBulkFrame({magic:JOURNAL_MAGIC,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}),'state'))break;
+      const frames=[];for(let index=0;index<total;index++)frames.push(encodeBulkFrame({magic:JOURNAL_MAGIC,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}));
+      if(this.peer.sendStatePacket)this.peer.sendStatePacket(frames);else for(const frame of frames)if(!this.peer.sendBinary(frame,'state'))break;
     }catch{this.peer.close('snapshot-compression-error');}
   }
   packet(buffer, metadata, sharedId, magic) {
