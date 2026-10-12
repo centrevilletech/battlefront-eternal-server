@@ -59,7 +59,7 @@ export class GameSession {
     this.timer = setInterval(() => {const begun=parentDiagnosticsEnabled?performance.now():0;this.flush();parentDuration('flushTimer',begun);}, 5); this.timer.unref();
     this.post({type:'join',client:id,spectator:peer.spectator,entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
   }
-  post(message){this.world.postMessage(this.publicationIncarnation===undefined?message:{...message,publicationIncarnation:this.publicationIncarnation});}
+  post(message){const begun=parentDiagnosticsEnabled?performance.now():0;try{this.world.postMessage(this.publicationIncarnation===undefined?message:{...message,publicationIncarnation:this.publicationIncarnation});}finally{parentDuration("authorityPost:"+message.type,begun);}}
   message(label, m) {
     if(this.closed)return;
     if(this.entity&&['input','inputs','actions','fire'].includes(m.type))return this.peer.close('entity-input-requires-binary');

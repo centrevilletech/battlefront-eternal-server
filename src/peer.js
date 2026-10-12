@@ -102,6 +102,7 @@ export class Peer extends EventEmitter {
       if (label === "events") this.hello();
     });
     ch.onMessage((raw) => {
+      const begun=parentDiagnosticsEnabled?performance.now():0;
       try {
         if(typeof raw!=='string'&&label==='state'&&this.authenticated){const bytes=Buffer.from(raw),magic=this.initiator?0x31454e42:0x31494e42;if(bytes.length>1100||bytes.length<(this.initiator?30:16)||bytes.readUInt32LE(0)!==magic)throw Error('invalid entity message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
         if(typeof raw!=='string' && label==='bulk' && this.authenticated){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
@@ -134,7 +135,7 @@ export class Peer extends EventEmitter {
       } catch (error) {
         this.emit("fault", error.message);
         this.close("invalid-message");
-      }
+      } finally {parentDuration("rtcCallback:"+label,begun);}
     });
     if (ch.isOpen() && label === "events") this.hello();
   }
