@@ -22,12 +22,14 @@ export class GameSession {
     this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??transportTuning.journalFrameBytes));
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;
     if(peer.remote?.protocol!==2||peer.remote?.simulation!=='bfe-sim-5'||peer.remote?.profile!=='entity-state-v1'||typeof peer.sendBinary!=='function')throw Error('Update required: entity-state-v1 protocol 2');
+    if(world.publication){this.publicationIncarnation=world.publicationSessionSerial=(world.publicationSessionSerial??0)+1;(world.publicationSessions??=new Map()).set(id,this);world.publication.leave(id);}
     this.entity=true;this.fresh=true;this.journal=true;this.binary=true;
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,transientGroups:0,transientBytes:0,transientDropped:0,reliableBytes:0};
     this.listener = (m) => {
       const recipient = m.recipients?.find(value=>value.client===id);
       if (m.client !== id && !recipient) return;
       if(recipient)m={...m,...recipient};
+      if(this.publicationIncarnation!==undefined&&m.sessionIncarnation!==undefined&&m.sessionIncarnation!==this.publicationIncarnation)return;
       if(m.type==='snapshotFault'){peer.send('events',{type:'gameplay-error',message:String(m.reason).slice(0,240)});setTimeout(()=>peer.close(m.reason),50).unref();}
       else if(m.type==='entityDiagnostics')peer.send('events',{type:'entity-diagnostics',actors:m.actors});
       else if(m.type==='entityEdgeResults')peer.send('state',{...m,type:'entity-edge-results'});
@@ -49,33 +51,34 @@ export class GameSession {
       const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
       this.entityInputTimes.push(now-this.entityInputWindow);
       if(++this.entityInputCount>120){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
-      this.world.postMessage({type:'entityInput',client:this.id,buffer:bytes});
+      this.post({type:'entityInput',client:this.id,buffer:bytes});
     });
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({type:'join',client:id,spectator:peer.spectator,entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
+    this.post({type:'join',client:id,spectator:peer.spectator,entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
   }
+  post(message){this.world.postMessage(this.publicationIncarnation===undefined?message:{...message,publicationIncarnation:this.publicationIncarnation});}
   message(label, m) {
     if(this.closed)return;
     if(this.entity&&['input','inputs','actions','fire'].includes(m.type))return this.peer.close('entity-input-requires-binary');
     if(m.type==='entity-edge-ack'){
       if(!this.entity||label!=='state'||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.ids)||m.ids.length>32||m.ids.some(id=>!Number.isSafeInteger(id)||id<1))return;
       const now=Date.now();if(now-(this.entityAckWindow??0)>=1000){this.entityAckWindow=now;this.entityAckCount=0;}if(++this.entityAckCount>120)return this.peer.close('entity-ack-flood');
-      this.world.postMessage({type:'entityEdgeAck',client:this.id,epoch:m.epoch,generation:m.generation,ids:m.ids});
+      this.post({type:'entityEdgeAck',client:this.id,epoch:m.epoch,generation:m.generation,ids:m.ids});
     }else if(m.type==='entity-ack'){
       if(!this.entity||label!=='state'||!Number.isSafeInteger(m.epoch)||m.epoch<1||!Number.isSafeInteger(m.packetId)||m.packetId<1)return;
       const now=Date.now();if(now-(this.entityAckWindow??0)>=1000){this.entityAckWindow=now;this.entityAckCount=0;}if(++this.entityAckCount>120)return this.peer.close('entity-ack-flood');
-      this.world.postMessage({type:'entityAck',client:this.id,epoch:m.epoch,packetId:m.packetId});
+      if(this.world.publication)this.world.publication.receipt('acks',{client:this.id,sessionIncarnation:this.publicationIncarnation,epoch:m.epoch,packetId:m.packetId});else this.post({type:'entityAck',client:this.id,epoch:m.epoch,packetId:m.packetId});
     }else if(m.type==='snapshot-ack'){
       if(!this.journal||label!==(this.fresh?'state':'events')||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.tick))return;
       const now=Date.now();if(now-(this.snapshotAckWindow??0)>=1000){this.snapshotAckWindow=now;this.snapshotAckCount=0;}if(++this.snapshotAckCount>120)return this.peer.close('snapshot-ack-flood');
-      this.world.postMessage({type:'snapshotAck',client:this.id,epoch:m.epoch,tick:m.tick});
+      this.post({type:'snapshotAck',client:this.id,epoch:m.epoch,tick:m.tick});
     }else if(m.type==='snapshot-resync'){
-      if(this.journal&&label===(this.fresh?'state':'events')&&this.allowResync())this.world.postMessage({type:'snapshotResync',client:this.id});
+      if(this.journal&&label===(this.fresh?'state':'events')&&this.allowResync())this.post({type:'snapshotResync',client:this.id});
     }else if(m.type==='actions'){
       if(label!=='events'||!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.actions)||m.actions.length>64||(m.human!==undefined&&!Array.isArray(m.human))||(m.human?.length??0)>8)return this.peer.close('invalid-actions');
       const now=Date.now();if(now-(this.actionWindow??0)>=1000){this.actionWindow=now;this.actionCount=0;}if(++this.actionCount>120)return this.peer.close('action-flood');
-      this.world.postMessage({type:'actions',client:this.id,envelope:{epoch:m.epoch,id:m.id,tick:m.tick,generation:m.generation,actions:m.actions,human:m.human??[]}});
+      this.post({type:'actions',client:this.id,envelope:{epoch:m.epoch,id:m.id,tick:m.tick,generation:m.generation,actions:m.actions,human:m.human??[]}});
     }else if(m.type==='fire') {
       if(label!=='events')return;
       if(!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||![0,1].includes(m.button)||typeof m.pressed!=='boolean')return this.peer.close();
@@ -83,7 +86,7 @@ export class GameSession {
       if(++this.fireCount>120)return this.peer.close();
       const edge={id:m.id,tick:m.tick,generation:m.generation,epoch:m.epoch,button:m.button,pressed:m.pressed};
       for(const key of ['aimYaw','aimPitch','viewTick'])if(m[key]!==undefined)edge[key]=m[key];
-      this.world.postMessage({type:'fire',client:this.id,edge});
+      this.post({type:'fire',client:this.id,edge});
     } else if (m.type === 'chat') {
       if (label !== 'events' || typeof m.text !== 'string' || m.text.length > 240) return;
       const now = Date.now();
@@ -91,14 +94,14 @@ export class GameSession {
       if (this.chatTimes.length >= 4) return;
       const text = m.text.replace(/[\x00-\x1f\x7f]/g, '').trim();
       if (!text) return;
-      this.chatTimes.push(now); this.world.postMessage({ type:'chat', client:this.id, text, team:m.team === true });
+      this.chatTimes.push(now); this.post({ type:'chat', client:this.id, text, team:m.team === true });
     } else if (m.type === 'input' || m.type === 'inputs') {
       if(this.fresh && label==='state' && m.snapshotAck)this.message('state',{type:'snapshot-ack',...m.snapshotAck});
       const commands = m.type === 'input' ? [m.command] : m.commands;
       if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
       const now=Date.now();if(now-(this.inputWindow??0)>=1000){this.inputWindow=now;this.inputCount=0;}
       this.inputCount+=commands.length;if(this.inputCount>512)return this.peer.close();
-      this.world.postMessage({ type: 'inputs', client: this.id, commands });
+      this.post({ type: 'inputs', client: this.id, commands });
     } else if (m.type === 'call' || m.type === 'rpc') {
       if (!Number.isSafeInteger(m.id) || !['init', 'start', 'suspend', 'inspect', 'resync'].includes(m.method)) {
         this.peer.send('events', { type: 'reply', id: m.id, error: 'Unsupported operation' }); return;
@@ -106,8 +109,8 @@ export class GameSession {
       const now=Date.now();if(now-(this.callWindow??0)>=1000){this.callWindow=now;this.callCount=0;}
       if(++this.callCount>32)return this.peer.close();
       if(m.method==='resync'&&!this.allowResync())return;
-      this.world.postMessage({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });
-    } else if (m.type === 'resync' && this.allowResync()) this.world.postMessage({ type: 'resync', client: this.id });
+      this.post({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });
+    } else if (m.type === 'resync' && this.allowResync()) this.post({ type: 'resync', client: this.id });
   }
   allowResync() {const now=performance.now();if(now-(this.lastResync??-Infinity)<1000)return false;this.lastResync=now;return true;}
   transportDiagnostics() {
@@ -117,7 +120,7 @@ export class GameSession {
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
   entityPacket(m) {
     if(!this.entity||this.closed)return;
-    const ageMs=Number.isFinite(m.capturedAtUnixMs)?Date.now()-m.capturedAtUnixMs:undefined;const rejected=reason=>{if(m.sessionIncarnation!==undefined)this.world.postMessage({type:'entityRejected',client:this.id,sessionIncarnation:m.sessionIncarnation,ownCorrection:!!m.ownCorrection,ageMs,reason});};
+    const ageMs=Number.isFinite(m.capturedAtUnixMs)?Date.now()-m.capturedAtUnixMs:undefined;const rejected=reason=>{if(m.sessionIncarnation!==undefined)(this.world.publication?message=>this.world.publication.packetResult(message):message=>this.post(message))({type:'entityRejected',client:this.id,sessionIncarnation:m.sessionIncarnation,ownCorrection:!!m.ownCorrection,ageMs,reason});};
     if(ageMs>250){this.transportCounters.stateDropped++;rejected('ownDroppedAge');return;}
     const bytes=Buffer.from(m.buffer);
     if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
@@ -126,7 +129,7 @@ export class GameSession {
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;rejected('ownDroppedNative');return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
-    this.world.postMessage({type:'entitySent',client:this.id,...(m.sessionIncarnation===undefined?{}:{sessionIncarnation:m.sessionIncarnation,ageMs}),epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
+    (this.world.publication?message=>{this.world.publication.packetResult(message);this.world.publication.receipt('admitted',message);}:message=>this.post(message))({type:'entitySent',client:this.id,...(m.sessionIncarnation===undefined?{}:{sessionIncarnation:m.sessionIncarnation,ageMs}),epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
   }
   async unorderedSnapshot(m,magic=JOURNAL_MAGIC,versionSlot='snapshotVersion') {
     const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);
@@ -144,7 +147,7 @@ export class GameSession {
       const frames=[];for(let index=0;index<total;index++)frames.push(encodeBulkFrame({magic,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}));
       let accepted=true;
       if(this.peer.sendStatePacket)accepted=this.peer.sendStatePacket(frames,this.fresh?{maxBuffered:0}:{});else for(const frame of frames)if(!this.peer.sendBinary(frame,'state')){accepted=false;break;}
-      if(accepted){this.transportCounters[counter+'Groups']++;this.transportCounters[counter+'Bytes']+=frames.reduce((n,frame)=>n+frame.length,0);if(this.fresh&&magic===JOURNAL_MAGIC)this.world.postMessage({type:'snapshotSent',client:this.id,epoch:m.snapshotEpoch,tick:m.snapshotTick});}else this.transportCounters[counter+'Dropped']++;
+      if(accepted){this.transportCounters[counter+'Groups']++;this.transportCounters[counter+'Bytes']+=frames.reduce((n,frame)=>n+frame.length,0);if(this.fresh&&magic===JOURNAL_MAGIC)this.post({type:'snapshotSent',client:this.id,epoch:m.snapshotEpoch,tick:m.snapshotTick});}else this.transportCounters[counter+'Dropped']++;
     }catch{this.peer.close('snapshot-compression-error');}
   }
   packet(buffer, metadata, sharedId, magic, admission) {
@@ -180,20 +183,21 @@ export class GameSession {
       if(this.journal)return this.peer.close('reliable-event-backlog');
       this.queue.length = 0; this.pending.length=0; this.inflight=null; this.rawBytes=0; this.compressionEpoch++; this.bytes = 0; this.awaitKeyframe = true;
       this.enqueue({type:'reset'});
-      this.world.postMessage({type:this.journal?'snapshotResync':'resync',client:this.id});
+      this.post({type:this.journal?'snapshotResync':'resync',client:this.id});
     }
     let count = 0;
     while (this.queue.length && count++ < 4) {
       const message = this.queue[0];
       if (!(message.binary?this.peer.sendBinary(message.binary):this.peer.send('bulk', message))) break;
       this.transportCounters.reliableBytes+=message.binary?.length??Buffer.byteLength(JSON.stringify(message));
-      if(message.admission)this.world.postMessage({type:'snapshotSent',client:this.id,...message.admission});
+      if(message.admission)this.post({type:'snapshotSent',client:this.id,...message.admission});
       this.queue.shift(); this.bytes -= message.payloadBytes ?? message.data?.length ?? message.buffers?.[0]?.length ?? 0;
     }
   }
   close() {
     if(this.closed)return;this.closed=true;this.compressionEpoch++;this.pending.length=0;this.rawBytes=0;
+    if(this.world.publicationSessions?.get(this.id)===this){this.world.publicationSessions.delete(this.id);this.world.publication?.leave(this.id);}
     clearInterval(this.timer); this.world.off('message', this.listener);
-    this.world.postMessage({ type: 'leave', client: this.id }); this.queue.length = 0;
+    this.post({ type: 'leave', client: this.id }); this.queue.length = 0;
   }
 }

@@ -1,6 +1,6 @@
 import {acknowledgeEntityPackets} from './entity-receipts.js';
 import {LatestBatch} from './latest-batch.js';
-import {PublicationCoordinator} from './publication-coordinator.js';
+import {PublicationBridge,acceptsPublicationCommand} from './publication-bridge.js';
 import { liveActorRoster } from './actor-roster.js';
 import { EntityEventStore } from './entity-event-store.js';
 import { entityImportance } from './entity-importance.js';
@@ -47,9 +47,10 @@ try {
   if(typeof Journal?.prototype.pin!=='function'||typeof Journal?.prototype.unpin!=='function')Journal=null;
   let journal,lastJournalId,eventSerial=0;
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
+  const sendParent=(message,transfer)=>{if(workerData.publicationWorker){if(message.client&&message.sessionIncarnation===undefined)message={...message,sessionIncarnation:clients.get(message.client)?.publicationIncarnation};if(message.recipients)message={...message,recipients:message.recipients.map(r=>({...r,sessionIncarnation:r.sessionIncarnation??clients.get(r.client)?.publicationIncarnation}))};}parentPort.postMessage(message,transfer);};
   let publicationSession=0;
-  const publication=workerData.publicationWorker?new PublicationCoordinator({engine:root,maxClients:workerData.publicationMaxClients??192,fatal:message=>{clearInterval(timer);inputAcks?.close();parentPort.postMessage({type:'publicationFatal',message});},send:(message,transfer)=>parentPort.postMessage(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
-  const inputAcks=publication?new LatestBatch(message=>parentPort.postMessage(message),{fatal:message=>publication.terminal(message)}):null;
+  const publication=workerData.publicationWorker?new PublicationBridge({engine:root,maxClients:workerData.publicationMaxClients??192,fatal:message=>{clearInterval(timer);inputAcks?.close();sendParent({type:'publicationFatal',message});},send:(message,transfer)=>sendParent(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
+  const inputAcks=publication?new LatestBatch(message=>sendParent(message),{fatal:message=>publication.terminal(message)}):null;
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
@@ -69,21 +70,21 @@ try {
     if(combatCapture)try{combatChanges=combatStore.update(combatCapture.drain(),game.worldClock.tick,entityRuntime.prepareEntityRecord,entityRuntime.decodeCombat);}catch(error){combatFaults.push(String(error.message).slice(0,160));}
     const eligibilityCache=new Map();
     for (const [client, state] of clients) if (state.started) {
-      if(state.fresh){const actor=world.players.get(client);if(actor)(inputAcks?message=>inputAckRecipients.push(message):message=>parentPort.postMessage(message))({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
+      if(state.fresh){const actor=world.players.get(client);if(actor)(inputAcks?message=>inputAckRecipients.push(message):message=>sendParent(message))({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
-        const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length){const ack=inputAcks&&inputAckRecipients.find(message=>message.client===client);if(ack)ack.edgeFeedback=feedback;else parentPort.postMessage({type:'entityEdgeResults',client,...feedback});}
+        const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length){const ack=inputAcks&&inputAckRecipients.find(message=>message.client===client);if(ack)ack.edgeFeedback=feedback;else sendParent({type:'entityEdgeResults',client,...feedback});}
         if(state.entityReady){
           try {
             semanticRecords??=entityCapture.capture(game.worldClock.tick).map(publication?r=>r:entityRuntime.prepareEntityRecord);
             commonSummaries??=entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1}).map(publication?r=>r:entityRuntime.prepareEntityRecord);
-            if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
+            if(game.worldClock.tick%60===0)sendParent({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
             const actor=world.players.get(client),vehicle=actor.unit?.seat?.vehicle,soldier=actor.unit?.soldier;
             const position=(vehicle?.position||actor.unit?.position)?.toArray(),velocity=(vehicle?.velocity||soldier?.velocity)?.toArray();
             let forward;
             if(vehicle?.quaternion){const {x,y,z,w}=vehicle.quaternion;forward=[2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)];}
             else if(soldier){const yaw=soldier.aimYaw,pitch=soldier.aimPitch,c=Math.cos(pitch);forward=[Math.sin(yaw)*c,Math.sin(pitch),Math.cos(yaw)*c];}
             const interest={position,velocity,forward,flying:!!vehicle?.flying};
-            if(publication&&combatFaults.length)parentPort.postMessage({type:'entityDiagnostics',client,actors:combatFaults.map(message=>({id:0,message:String(message).slice(0,160)}))});
+            if(publication&&combatFaults.length)sendParent({type:'entityDiagnostics',client,actors:combatFaults.map(message=>({id:0,message:String(message).slice(0,160)}))});
             if(publication){
               publicationRecipients.push({client,sessionIncarnation:state.publicationIncarnation,spectator:!!actor.spectator,unitId:actor.unit?.id,interest,summaries:entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false,eligibilityCache}),own:actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1}),fields:{ackInput:actor.mailbox.ack,ackActions:0,ackFire:0}});
               continue;
@@ -94,7 +95,7 @@ try {
             }
             for(const prepared of commonSummaries)state.entity.update(prepared,4);
             for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false,eligibilityCache}))state.entity.update(record,4);
-            if(combatFaults.length)parentPort.postMessage({type:'entityDiagnostics',client,actors:combatFaults.map(message=>({id:0,message:String(message).slice(0,160)}))});
+            if(combatFaults.length)sendParent({type:'entityDiagnostics',client,actors:combatFaults.map(message=>({id:0,message:String(message).slice(0,160)}))});
             for(const event of state.combatReady?combatChanges:combatStore.records.values()){
               const priority=[event.view.ownerId,event.view.targetId,event.view.attackerId].includes(actor.unit?.id)?24:entityImportance(event.view,interest);
               state.entity.updateEvent({...event,record:event.prepared},priority);
@@ -107,24 +108,24 @@ try {
               if(!state.entityBudget.take(packet.buffer.byteLength,begun)){state.entityMetrics.budgetDropped++;return false;}
               state.entityMetrics[ownCorrection?'ownOffered':'remoteOffered']++;
               const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
-              parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs,buffer},[buffer]);return true;
+              sendParent({type:'entityPacket',client,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs,buffer},[buffer]);return true;
             };
             const packet=state.entity.packet({...fields,own});
             if(offer(packet,!!own)){const maxBytes=Math.min(1100,state.entityBudget.available(begun));if(maxBytes>30)offer(state.entity.packet({...fields,maxBytes,excludePacketIds:[packet.packetId]}),false);}
-          } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
+          } catch(error){sendParent({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
           continue;
         }
         if(state.fresh.joinIssued)continue;
       }
       const keyframe=Boolean(publicationKeyframe||state.keyframe), packet=world.snapshot(client,{keyframe,sharedPacket:true});
       state.keyframe=false;if(!packet)continue;
-      if(packet instanceof ArrayBuffer){parentPort.postMessage({type:'packet',client,buffer:packet,keyframe},[packet]);continue;}
+      if(packet instanceof ArrayBuffer){sendParent({type:'packet',client,buffer:packet,keyframe},[packet]);continue;}
       let group=groups.get(packet.sharedId);
       if(!group)groups.set(packet.sharedId,group={type:'packet',sharedId:packet.sharedId,buffer:packet.buffer.slice(0),recipients:[]});
       group.recipients.push({client,keyframe,metadata:state.compactMetadata && typeof compactMetadata==='function' ? compactMetadata(packet.metadata) : packet.metadata});
     }
     if(inputAcks)inputAcks.offer(inputAckRecipients);
-    if(publication&&publicationRecipients.length)publication.capture({tick:game.worldClock.tick,capturedAtUnixMs,records:semanticRecords??[],summaries:commonSummaries??[],events:[...combatStore.records.values()].map(e=>({record:e.prepared.record,expiresTick:e.expiresTick,retention:e.retention})),recipients:publicationRecipients});
+    if(publication)publication.capture({tick:game.worldClock.tick,capturedAtUnixMs,records:semanticRecords??[],summaries:commonSummaries??[],events:[...combatStore.records.values()].map(e=>({record:e.prepared.record,expiresTick:e.expiresTick,retention:e.retention})),recipients:publicationRecipients});
     for(const group of groups.values()) {
       const journalRecipients=group.recipients.filter(r=>clients.get(r.client).journal);
       if(journalRecipients.length) {
@@ -135,7 +136,7 @@ try {
           const readyRecipients=journalRecipients.filter(r=>!clients.get(r.client).entity&&clients.get(r.client).snapshotAck?.epoch===journal.epoch);
           for(let offset=0;offset<events.calls.length;offset+=256){
             const batch={...events,id:++eventSerial,calls:events.calls.slice(offset,offset+256)};
-            const sendEvents=(type,value,recipients,kind)=>{if(!value.calls.length||!recipients.length)return;parentPort.postMessage({type,replaceKey:`${events.epoch}:${events.tick}`,sharedId:`${kind}:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...value})).buffer,recipients});};
+            const sendEvents=(type,value,recipients,kind)=>{if(!value.calls.length||!recipients.length)return;sendParent({type,replaceKey:`${events.epoch}:${events.tick}`,sharedId:`${kind}:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...value})).buffer,recipients});};
             const split=readyRecipients.filter(r=>clients.get(r.client).transientSnapshots);
             sendEvents('journalEvents',batch,readyRecipients.filter(r=>!clients.get(r.client).transientSnapshots),'events');
             if(split.length){const parts=partitionSnapshotEvents(batch);sendEvents('journalEvents',parts.reliable,split,'reliable-events');sendEvents('journalTransients',parts.transient,split,'transient-events');}
@@ -150,7 +151,7 @@ try {
             if(previousAck&&!state.fresh.ack)journal.unpin(recipient.client+':ack');
             state.snapshotAck=state.fresh.ack;
             if(!plan)continue;
-            if(plan.initialBootstrap&&!journal.pin(recipient.client+':join',journal.current.tick)){parentPort.postMessage({type:'snapshotFault',reason:'snapshot-memory-limit',client:recipient.client});continue;}
+            if(plan.initialBootstrap&&!journal.pin(recipient.client+':join',journal.current.tick)){sendParent({type:'snapshotFault',reason:'snapshot-memory-limit',client:recipient.client});continue;}
             const key=`fresh:${journal.epoch}:${journal.current.tick}:${plan.baseTick}:${!!plan.initialBootstrap}:${state.relativeSnapshots}`;
             let batch=encoded.get(key);
             if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick:plan.baseTick,checkpoint:true,relativeVectors:state.relativeSnapshots}),reliable:!!plan.initialBootstrap,initialBootstrap:!!plan.initialBootstrap,snapshotEpoch:journal.epoch,snapshotTick:journal.current.tick,capturedAtUnixMs,recipients:[]});
@@ -171,40 +172,41 @@ try {
           if(checkpoint){measurements.journalCheckpointPackets++;journal.pin(recipient.client+':pending',journal.current.tick);state.pendingCheckpoint={epoch:journal.epoch,tick:journal.current.tick};state.checkpoints.set(journal.current.tick,journal.epoch);while(state.checkpoints.size>16)state.checkpoints.delete(state.checkpoints.keys().next().value);}
           if(reliable){measurements.journalBootstraps++;state.bootstrapAt=now;state.bootstrapEpoch=journal.epoch;}
         }
-        for(const batch of encoded.values())parentPort.postMessage(batch,[batch.buffer]);
+        for(const batch of encoded.values())sendParent(batch,[batch.buffer]);
         } catch(error) {
           if(typeof SnapshotMemoryLimit!=='function'||!(error instanceof SnapshotMemoryLimit))throw error;
-          parentPort.postMessage({type:'snapshotFault',reason:'snapshot-memory-limit',recipients:journalRecipients});journal=null;lastJournalId=null;
+          sendParent({type:'snapshotFault',reason:'snapshot-memory-limit',recipients:journalRecipients});journal=null;lastJournalId=null;
           for(const recipient of journalRecipients){const state=clients.get(recipient.client);state.snapshotAck=null;state.fresh?.reset(null);}
         }
       }
       group.recipients=group.recipients.filter(r=>!clients.get(r.client).journal);
-      if(group.recipients.length)parentPort.postMessage(group,[group.buffer]);
+      if(group.recipients.length)sendParent(group,[group.buffer]);
     }
     measure('encode',performance.now()-begun);
   };
   // Run the simulation at 60 Hz and send accumulated changes at 20 Hz.
   const matchId = randomUUID();
-  const report = () => parentPort.postMessage({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].filter(p=>!p.spectator).map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
+  const report = () => sendParent({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].filter(p=>!p.spectator).map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
   let ended = false;
   const step = () => {
     const begun=performance.now();
     for(const [client,state]of clients)if(state.entityEdges&&state.started){
       try{const actor=world.players.get(client);if((actor.unit?.generation??0)!==state.entityEdges.generation)state.entityEdges.reset(1,actor.unit?.generation??0);
-      state.entityEdges.advance(game.worldClock.tick+1);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});}
+      state.entityEdges.advance(game.worldClock.tick+1);}catch(error){state.started=false;sendParent({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});}
     }
     const tick=world.step();
-    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed(tick);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed(tick);}catch(error){state.started=false;sendParent({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
     measure('total',performance.now()-begun);
-    if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
+    if (game.battle.finished && !ended) { ended = true; report(); sendParent({ type: 'finished', tick }); }
   };
-  parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
+  sendParent({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
     try {
+      if(publication&&m.client&&!acceptsPublicationCommand(clients,m))return;
       if(m.type==='inputAckBatchProcessed')inputAcks?.processed(m.inputAckBatchId);
-      else if(m.type==='publicationBatchProcessed')publication?.processed(m);
-      else if(m.type==='resetMetrics'){publication?.resetMetrics();if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
-      else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',publication:publication?.metricsSnapshot(),threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }
+      else if(m.type==='publicationCaptureProcessed')publication?.processed(m);
+      else if(m.type==='resetMetrics'){publication?.resetMetrics();if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;sendParent({type:'metricsReset',tick:game.worldClock.tick});}
+      else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} sendParent({type:'metrics',publication:publication?.metricsSnapshot(),threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
         Object.assign(m,{entity:true,journal:true,fresh:true,compactMetadata:true,linearProjectiles:true,separateActions:true,relativeSnapshots:false,transientSnapshots:false});
         if (clients.has(m.client)) throw Error('already joined');
@@ -219,11 +221,11 @@ try {
           entityCapture=new entityRuntime.EntityWorldCapture(game,entityRegistry,{fireCounter:unit=>entityShots.counter(unit)});
         }
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { publicationIncarnation:++publicationSession,started: false, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,entityBudget:m.entity?new EntityBudget():null,entityMetrics:{ownOffered:0,remoteOffered:0,admitted:0,budgetDropped:0,lastOwnTick:null},compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
-        publication?.join(m.client,publicationSession);
+        clients.set(m.client, { publicationIncarnation:publication?(m.publicationIncarnation??++publicationSession):++publicationSession,started: false, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,entityBudget:m.entity?new EntityBudget():null,entityMetrics:{ownOffered:0,remoteOffered:0,admitted:0,budgetDropped:0,lastOwnTick:null},compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
+        publication?.join(m.client,clients.get(m.client).publicationIncarnation);
         if(m.entity)clients.get(m.client).entityEdges=new EntityEdges({Receiver:entityRuntime.EntityEdgeReceiver,actor:world.players.get(m.client),world,client:m.client,registry:entityRegistry});
-        if(m.entity)parentPort.postMessage({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
-        parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:m.entity?'entity-v1':clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
+        if(m.entity)sendParent({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
+        sendParent({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:m.entity?'entity-v1':clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');clients.delete(m.client);publication?.leave(m.client); world.removePlayer(m.client); updateLinear(); }
       else if(m.type==='entityInput'){
         const state=clients.get(m.client);if(!state?.entity||!state.started)return;
@@ -250,14 +252,14 @@ try {
       }
       else if(m.type==='snapshotResync') {const state=clients.get(m.client);if(state){journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');state.snapshotAck=null;state.pendingCheckpoint=null;state.bootstrapAt=0;state.fresh?.reset(journal?.epoch??null);}}
       else if(m.type==='actions'){if(clients.get(m.client)?.started)world.actions?.(m.client,m.envelope);}
-      else if(m.type==='fire'){const state=clients.get(m.client),accepted=Boolean(state?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;if(state){state.fireDiagnostics[accepted?'accepted':'rejected']++;state.fireDiagnostics.last={id:m.edge.id,tick:m.edge.tick,generation:m.edge.generation,button:m.edge.button,pressed:m.edge.pressed,viewTick:m.edge.viewTick,serverTick:game.worldClock.tick,accepted};}parentPort.postMessage({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
-      else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)parentPort.postMessage({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
+      else if(m.type==='fire'){const state=clients.get(m.client),accepted=Boolean(state?.started && world.fire(m.client,m.edge));measurements[accepted?'fireAccepted':'fireRejected']++;if(state){state.fireDiagnostics[accepted?'accepted':'rejected']++;state.fireDiagnostics.last={id:m.edge.id,tick:m.edge.tick,generation:m.edge.generation,button:m.edge.button,pressed:m.edge.pressed,viewTick:m.edge.viewTick,serverTick:game.worldClock.tick,accepted};}sendParent({type:'fireAck',client:m.client,id:m.edge.id,accepted});}
+      else if (m.type === 'announcement') { for(const [client,state] of clients)if(state.started)sendParent({type:'chat',client,text:m.text,sender:'Server',playerId:0,team:false,admin:true}); }
       else if (m.type === 'chat') {
         const sender = world.player(m.client);
         if (!sender || !clients.get(m.client)?.started) return;
         for (const [client, state] of clients) {
           if (!state.started || (m.team && world.player(client)?.team !== sender.team)) continue;
-          parentPort.postMessage({ type:'chat',client,text:m.text,team:m.team,playerId:sender.unitId,sender:`Player ${sender.unitId}` });
+          sendParent({ type:'chat',client,text:m.text,team:m.team,playerId:sender.unitId,sender:`Player ${sender.unitId}` });
         }
       } else if (m.type === 'inputs') {
         if (!clients.get(m.client)?.started) return;
@@ -281,22 +283,22 @@ try {
           const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
           result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?{profile:'entity-v1',payloadBytesPerSecond:26000,burstBytes:2200,ownNominalHz:20,...clients.get(m.client).entityMetrics,events:{...clients.get(m.client).entity.eventMetrics,retained:clients.get(m.client).entity.events.size,bytes:clients.get(m.client).entity.eventBytes,globalDropped:combatStore.dropped},offeredBytes:clients.get(m.client).entityBudget.offeredBytes,admissionAgeTicks:[...clients.get(m.client).entity.records.values()].map(entry=>({id:entry.record.id,kind:entry.record.kind,age:Number.isFinite(entry.last)?game.worldClock.tick-entry.last:null}))}:undefined,inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
         }
-        parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
+        sendParent({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
         for (let i = 0; i < Math.min(m.count ?? 1, 600); i++) step();
-        parentPort.postMessage({ type: 'state', state: worldState(game) });
+        sendParent({ type: 'state', state: worldState(game) });
       } else if (m.type === 'start' && !timer) {
         last = performance.now(); timer = setInterval(() => {
           try {
             const now = performance.now(), accumulated = debt+(now-last)/1000; measurements.droppedTicks += Math.max(0,accumulated-8/60)*60; debt = Math.min(accumulated,8/60); last = now;
             let count = 0;
             while (debt >= 1/60 && count++ < 4) { step(); debt -= 1/60; }
-            if (count) parentPort.postMessage({ type: 'tick', tick: game.worldClock.tick });
-          } catch(e) { clearInterval(timer); parentPort.postMessage({ type: 'error', message: e.message, stack: e.stack }); }
+            if (count) sendParent({ type: 'tick', tick: game.worldClock.tick });
+          } catch(e) { clearInterval(timer); sendParent({ type: 'error', message: e.message, stack: e.stack }); }
         }, 5);
       } else if (m.type === 'stop') { clearInterval(timer); timer = null; }
     } catch(e) {
-      parentPort.postMessage(m.client ? { type: 'reply', client: m.client, id: m.id, error: e.message } : { type: 'error', message: e.message, stack: e.stack });
+      sendParent(m.client ? { type: 'reply', client: m.client, id: m.id, error: e.message } : { type: 'error', message: e.message, stack: e.stack });
     }
   });
 } catch(e) { parentPort.postMessage({ type: 'error', message: e.message, stack: e.stack }); }

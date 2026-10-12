@@ -5,12 +5,12 @@ export class PublicationCoordinator {
  constructor({engine,send,report=()=>{},workerFactory=()=>new Worker(new URL('./publication-worker.js',import.meta.url),{workerData:{engine}}),maxClients=80,maxReceipts=128,timeoutMs=2000,fatal=()=>{}}){
   Object.assign(this,{send,report,workerFactory,maxClients,maxReceipts,timeoutMs,fatal});this.clients=new Map();this.pending=null;this.inflight=null;this.serial=0;this.incarnation=0;this.closed=false;this.failures=0;this.metrics={dispatched:0,superseded:0,completed:0,staleResults:0,restarts:0,receiptEvictions:0,maxPending:0};this.diagnostics={phases:{},clients:{}};this.start();
  }
- start(){const worker=this.worker=this.workerFactory(),incarnation=++this.incarnation;worker.on('message',message=>{
+ start(){let worker;try{worker=this.worker=this.workerFactory();}catch(error){this.terminal('publication worker creation failed: '+error.message);return;}const incarnation=++this.incarnation;worker.on('message',message=>{
    if(this.closed||worker!==this.worker||message.incarnation!==incarnation){this.metrics.staleResults++;return;}
    if(message.type==='fault'){this.fail(worker,Error(message.message));return;}
    if(message.type!=='result'||message.id!==this.inflight?.id)return;
    this.observePhase('dispatchToResultMs',performance.now()-this.inflight.dispatchedAt);this.observePhase('captureToResultMs',Date.now()-this.inflight.capture.capturedAtUnixMs);this.inflight.resultAt=performance.now();this.metrics.completed++;const next=message.metrics,previous=this.lastWorkerMetrics;this.lastWorkerMetrics=next;const totals=this.metrics.worker??={jobs:0,totalMs:0,lifetimeMaxMs:0,cpu:{user:0,system:0}};for(const key of ['jobs','totalMs'])totals[key]+=Math.max(0,next[key]-(previous?.[key]??0));for(const key of ['user','system'])totals.cpu[key]+=Math.max(0,next.cpu[key]-(previous?.cpu?.[key]??0));totals.lifetimeMaxMs=Math.max(totals.lifetimeMaxMs,next.maxMs);totals.clients=next.clients;this.failures=0;
-   for(const packet of message.packets){const client=this.clients.get(packet.client);if(client?.incarnation!==packet.sessionIncarnation)continue;this.observe(packet.client,'ownOffered',packet.ownCorrection);this.send(packet,[packet.buffer]);}
+   try{for(const packet of message.packets){const client=this.clients.get(packet.client);if(client?.incarnation!==packet.sessionIncarnation)continue;this.observe(packet.client,'ownOffered',packet.ownCorrection);this.send(packet,[packet.buffer]);}}catch(error){this.terminal('publication transport consumer failed: '+error.message);return;}
    clearTimeout(this.watchdog);this.inflight.phase='transport';this.armTimeout();this.send({type:'publicationBatchDone',publicationJobId:message.id,publicationWorkerIncarnation:incarnation});
   });worker.on('error',error=>this.fail(worker,error));worker.on('exit',code=>{if(!this.closed&&worker===this.worker)this.fail(worker,Error(`publication worker exited ${code}`));});
  }
