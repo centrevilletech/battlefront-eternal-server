@@ -49,17 +49,20 @@ export class GameSession {
     peer.on('binary',(buffer,label)=>{
       if(!this.entity||label!=='state'||this.closed)return;
       parentCount('inputCallbacks');parentCount('inputBytes',buffer.byteLength);
-      const bytes=Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
+      const bytes=Buffer.isBuffer(buffer)?buffer:Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
       const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
       this.entityInputTimes.push(now-this.entityInputWindow);
       if(++this.entityInputCount>120){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
-      this.post({type:'entityInput',client:this.id,buffer:bytes});
+      // Own an exact-sized allocation: pooled Buffer backing stores must not be
+      // transferred or cloned into the authority for every input packet.
+      const owned=Uint8Array.from(bytes);
+      this.post({type:'entityInput',client:this.id,buffer:owned.buffer},[owned.buffer]);
     });
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => {const begun=parentDiagnosticsEnabled?performance.now():0;this.flush();parentDuration('flushTimer',begun);}, 5); this.timer.unref();
     this.post({type:'join',client:id,spectator:peer.spectator,entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
   }
-  post(message){const begun=parentDiagnosticsEnabled?performance.now():0;try{this.world.postMessage(this.publicationIncarnation===undefined?message:{...message,publicationIncarnation:this.publicationIncarnation});}finally{parentDuration("authorityPost:"+message.type,begun);}}
+  post(message,transfer){const begun=parentDiagnosticsEnabled?performance.now():0;try{this.world.postMessage(this.publicationIncarnation===undefined?message:{...message,publicationIncarnation:this.publicationIncarnation},transfer);}finally{parentDuration("authorityPost:"+message.type,begun);}}
   message(label, m) {
     if(this.closed)return;
     if(this.entity&&['input','inputs','actions','fire'].includes(m.type))return this.peer.close('entity-input-requires-binary');
