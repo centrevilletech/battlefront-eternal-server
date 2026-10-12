@@ -43,6 +43,10 @@ and imported data read-only and persist `/data`. A Linux Docker host should use
 host networking for LAN discovery and ICE. No GPU, Electron, DOM or WebGL is
 required by the server.
 
+The Compose example and Aldine production deployment allocate two CPU cores and
+1 GiB of memory to the game server. CI enforces that production budget while
+preserving the operator's engine and game-data mounts.
+
 Finished matches advance the configured playlist and reload connected clients
 into a new authoritative world. The same persistent server identity is retained.
 

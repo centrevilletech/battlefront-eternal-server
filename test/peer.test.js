@@ -24,6 +24,13 @@ test('state envelopes require their own increasing transport sequence',()=>{
  assert.deepEqual(delivered.map(message=>message.sequence),[1,3]);
  assert.equal(delivered[0].commands[0].sequence,99);
 });
+
+test('selected path treats mapped IPv4 addresses as IPv4',()=>{
+ for(const [address,family] of [['192.0.2.1','ipv4'],['::ffff:192.0.2.1','ipv4'],['2001:db8::1','ipv6']]){
+  const peer={pc:{getSelectedCandidatePair:()=>({local:{type:'host'},remote:{type:'host',address}})}};
+  assert.deepEqual(Peer.prototype.path.call(peer),{kind:'direct',family});
+ }
+});
 test(
   "identity proof binds encrypted session; content mismatch is spectator",
   { timeout: 15000 },

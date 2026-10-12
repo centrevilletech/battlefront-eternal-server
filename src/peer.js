@@ -264,7 +264,7 @@ export class Peer extends EventEmitter {
           kind: [pair.local.type, pair.remote.type].includes("relay")
             ? "relay"
             : "direct",
-          family: pair.remote.address.includes(":") ? "ipv6" : "ipv4",
+          family: pair.remote.address.includes(":") && !/^::ffff:(?:\d{1,3}\.){3}\d{1,3}$/i.test(pair.remote.address) ? "ipv6" : "ipv4",
         }
       : { kind: "checking" };
   }
