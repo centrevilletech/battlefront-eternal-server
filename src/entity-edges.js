@@ -4,7 +4,7 @@ export class EntityEdges {
   constructor({Receiver,actor,world,client,registry,capacity=256}) {
     this.actor=actor;this.world=world;this.client=client;this.registry=registry;this.capacity=capacity;
     this.receiver=new Receiver({maxFuture:120});this.pending=new Map();this.results=new Map();this.received=[];
-    actor.actions.enableOutcomes();actor.fire.enableOutcomes();this.reset(1,actor.unit.generation);
+    actor.actions.enableOutcomes();actor.fire.enableOutcomes();this.reset(1,actor.unit?.generation??0);
   }
   reset(epoch,generation) {
     this.epoch=epoch;this.generation=generation;this.receiver.reset(epoch,generation);

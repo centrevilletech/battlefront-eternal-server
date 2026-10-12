@@ -28,7 +28,7 @@ export class GameSession {
       const recipient = m.recipients?.find(value=>value.client===id);
       if (m.client !== id && !recipient) return;
       if(recipient)m={...m,...recipient};
-      if(m.type==='snapshotFault')peer.close(m.reason);
+      if(m.type==='snapshotFault'){peer.send('events',{type:'gameplay-error',message:String(m.reason).slice(0,240)});setTimeout(()=>peer.close(m.reason),50).unref();}
       else if(m.type==='entityDiagnostics')peer.send('events',{type:'entity-diagnostics',actors:m.actors});
       else if(m.type==='entityEdgeResults')peer.send('state',{...m,type:'entity-edge-results'});
       else if(m.type==='entityRegistry')peer.send('events',{type:'entity-registry',registry:m.registry});

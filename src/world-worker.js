@@ -59,14 +59,14 @@ try {
           try {
             semanticRecords??=entityCapture.capture(game.worldClock.tick);
             if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
-            const actor=world.players.get(client),position=actor.unit.position;
+            const actor=world.players.get(client),position=actor.unit?.position;
             for(const record of semanticRecords){
-              if(record.kind==='soldier'&&record.id===actor.unit.id)continue;
-              const distance=record.position?Math.hypot(record.position[0]-position.x,record.position[1]-position.y,record.position[2]-position.z):Infinity;
+              if(!actor.spectator&&record.kind==='soldier'&&record.id===actor.unit?.id)continue;
+              const distance=record.position&&position?Math.hypot(record.position[0]-position.x,record.position[1]-position.y,record.position[2]-position.z):Infinity;
               state.entity.update(record,record.kind==='seat'||record.kind==='tombstone'?8:distance<40?8:distance<100?3:1);
             }
             for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client}))state.entity.update(record,4);
-            const own=entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
+            const own=actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
             const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
             const offer=(packet,ownCorrection)=>{
               if(!state.entityBudget.take(packet.buffer.byteLength,begun)){state.entityMetrics.budgetDropped++;return false;}
@@ -75,7 +75,7 @@ try {
               parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs,buffer},[buffer]);return true;
             };
             const packet=state.entity.packet({...fields,own});
-            if(offer(packet,true)&&state.entityBudget.available(begun)>=1100)offer(state.entity.packet({...fields,excludePacketIds:[packet.packetId]}),false);
+            if(offer(packet,!!own)&&state.entityBudget.available(begun)>=1100)offer(state.entity.packet({...fields,excludePacketIds:[packet.packetId]}),false);
           } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
           continue;
         }
@@ -153,7 +153,7 @@ try {
   const step = () => {
     const begun=performance.now();
     for(const [client,state]of clients)if(state.entityEdges&&state.started){
-      try{const actor=world.players.get(client);if(actor.unit.generation!==state.entityEdges.generation)state.entityEdges.reset(1,actor.unit.generation);
+      try{const actor=world.players.get(client);if((actor.unit?.generation??0)!==state.entityEdges.generation)state.entityEdges.reset(1,actor.unit?.generation??0);
       state.entityEdges.advance(game.worldClock.tick+1);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});}
     }
     const tick=world.step();
@@ -170,7 +170,6 @@ try {
         Object.assign(m,{entity:true,journal:true,fresh:true,compactMetadata:true,linearProjectiles:true,separateActions:true,relativeSnapshots:false,transientSnapshots:false});
         if (clients.has(m.client)) throw Error('already joined');
         if(m.entity&&!entityRuntime)throw Error('semantic entity runtime unavailable');
-        if(m.entity&&m.spectator)throw Error('semantic spectator mode not implemented');
         if(m.fresh && (!Journal || typeof SnapshotMemoryLimit!=='function'))throw Error('fresh state requires the bounded journal runtime');
         if(m.entity&&!entityRegistry){
           entityRegistry=entityRuntime.createEntityRegistry(game.data,{contentEpoch:1,inputCodes:entityRuntime.INPUT_CODES,bindingProfiles:entityRuntime.DEFAULT_BINDING_PROFILES,posts:game.posts.posts});
