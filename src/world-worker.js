@@ -89,7 +89,7 @@ try {
         }
         for(const batch of encoded.values())parentPort.postMessage(batch,[batch.buffer]);
         } catch(error) {
-          if(error?.name!=='SnapshotMemoryLimit')throw error;
+          if(typeof SnapshotMemoryLimit!=='function'||!(error instanceof SnapshotMemoryLimit))throw error;
           parentPort.postMessage({type:'snapshotFault',reason:'snapshot-memory-limit',recipients:journalRecipients});journal=null;lastJournalId=null;
           for(const recipient of journalRecipients){const state=clients.get(recipient.client);state.snapshotAck=null;state.fresh?.reset(null);}
         }

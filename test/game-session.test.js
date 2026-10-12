@@ -137,6 +137,7 @@ test('fresh state ACK admission and input feedback never depend on reliable bulk
  const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try{
   assert(world.sent[0].fresh);assert(world.sent[0].separateActions&&world.sent[0].compactMetadata&&world.sent[0].linearProjectiles);assert(session.binary);assert(!world.sent[0].relativeSnapshots&&!world.sent[0].transientSnapshots);
+  const dispatch=[],originalDispatch=session.unorderedSnapshot;session.unorderedSnapshot=value=>dispatch.push(value);world.emit('message',{type:'journalPacket',client:'player',reliable:true});assert.equal(dispatch.length,1,'even bootstrap snapshots avoid reliable bulk');session.unorderedSnapshot=originalDispatch;
   const snapshot={buffer:Buffer.from('fresh'),sharedId:'fresh:1',snapshotEpoch:2,snapshotTick:30,capturedAtUnixMs:Date.now(),metadata:{playerId:1}};
   const before=compressionStats.calls;await session.unorderedSnapshot(snapshot);assert.equal(compressionStats.calls,before);assert(!world.sent.some(m=>m.type==='snapshotSent'));
   world.emit('message',{type:'inputAck',client:'player',ack:12,ackTick:29,serverTick:30,generation:1,epoch:1});assert.equal(peer.sent.at(-1).value.type,'input-ack');assert.equal(peer.sent.at(-1).lane,'state');
