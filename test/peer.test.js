@@ -94,15 +94,15 @@ test('semantic binary direction and initial bulk are authenticated and bounded',
 });
 
 test('old protocol receives an explicit version error before authentication',()=>{
- const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
+ const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-6',profile:'entity-state-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
  assert.throws(()=>peer.handshake({type:'hello',nonce:'a'.repeat(64),publicKey:'b'.repeat(60),protocol:1,simulation:'bfe-sim-2'}),/Update required/);
  assert.equal(sent[0].type,'version-error');assert.match(sent[0].message,/protocol 2/);assert(!peer.authenticated);
 });
 
  test('previous correction schema revision is rejected before authentication',()=>{
- const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
+ const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-6',profile:'entity-state-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
  assert.throws(()=>peer.handshake({type:'hello',nonce:'a'.repeat(64),publicKey:'b'.repeat(60),protocol:2,simulation:'bfe-sim-3',profile:'entity-state-v1'}),/Update required/);
- assert.match(sent[0].message,/bfe-sim-5/);assert(!peer.authenticated);
+ assert.match(sent[0].message,/bfe-sim-6/);assert(!peer.authenticated);
  });
 test('native readiness and send close races isolate the affected peer without admitting state',()=>{
  for(const failure of ['isOpen','bufferedAmount','sendMessage','sendMessageBinary']){

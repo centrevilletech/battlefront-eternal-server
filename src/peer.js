@@ -28,7 +28,7 @@ export class Peer extends EventEmitter {
 
     this.initiator = initiator;
     this.expectedKey = expectedKey;
-    this.compatibility = { protocol:2, simulation:"bfe-sim-5", profile:"entity-state-v1", content };
+    this.compatibility = { protocol:2, simulation:"bfe-sim-6", profile:"entity-state-v1", content };
     this.channels = new Map();
     this.pendingCandidates = [];
     this.hasRemoteDescription = false;
@@ -181,7 +181,7 @@ export class Peer extends EventEmitter {
         m.profile !== this.compatibility.profile ||
         m.simulation !== this.compatibility.simulation
       )
-        {this.channels.get("events").sendMessage(JSON.stringify({type:"version-error",message:"Update required: protocol 2 / bfe-sim-5 / entity-state-v1"}));throw Error("Update required: incompatible protocol version");}
+        {this.channels.get("events").sendMessage(JSON.stringify({type:"version-error",message:"Update required: protocol 2 / bfe-sim-6 / entity-state-v1"}));throw Error("Update required: incompatible protocol version");}
       if (this.expectedKey && keyId(m.publicKey) !== this.expectedKey)
         throw Error("unexpected identity");
       this.remote = m;
