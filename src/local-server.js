@@ -5,8 +5,8 @@ import { GameSession } from './game-session.js';
 import { startLanDiscovery } from './lan.js';
 export async function startLocalServer({ config, identity, certificate, world, query, isBanned = () => false }) {
   const peers = new Set(), sockets = new Set();
-  const info = () => ({ id: identity.id, name: config.name, protocol: 1,
-    simulation: config.simulation ?? 'bfe-sim-2', content: config.content ?? 'bfe-content-1',
+  const info = () => ({ id: identity.id, name: config.name, protocol: 2, profile: 'entity-state-v1',
+    simulation: 'bfe-sim-3', content: config.content ?? 'bfe-content-1',
     rotation: config.rotation, players: [...peers].filter(p=>p.authenticated).length,
     maxPlayers: config.maxPlayers ?? 64, relayPolicy: 'never', fingerprint: certificate.fingerprint,
     query, port: config.gamePort ?? 18451 });

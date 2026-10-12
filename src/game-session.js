@@ -15,16 +15,14 @@ function compress(world, buffer, sharedId) {
   if(sharedId!==undefined){cache.set(sharedId,promise);while(cache.size>128)cache.delete(cache.keys().next().value);}
   return promise;
 }
-// Application protocol above authenticated WebRTC. Reliable packets preserve the
-// existing engine delta chain; inputs use the unordered state channel.
+// Fixed entity protocol above authenticated WebRTC: one reliable join baseline,
+// then independent entity state and compact inputs on the unordered channel.
 export class GameSession {
   constructor(peer, world, id, welcome, options={}) {
     this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??transportTuning.journalFrameBytes));
-    this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;this.binary=Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('binary-bulk-v1')&&typeof peer.sendBinary==='function';
-    this.entity=peer.remote?.capabilities?.includes('entity-state-v1')&&typeof peer.sendBinary==='function';
-    this.fresh=(this.entity||peer.remote?.capabilities?.includes('fresh-state-v1'))&&typeof peer.sendBinary==='function';
-    if(this.fresh)this.binary=true;
-    this.journal=(this.fresh||peer.remote?.capabilities?.includes('snapshot-journal-v1'))&&typeof peer.sendBinary==='function';
+    this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;
+    if(peer.remote?.protocol!==2||peer.remote?.simulation!=='bfe-sim-3'||peer.remote?.profile!=='entity-state-v1'||typeof peer.sendBinary!=='function')throw Error('Update required: entity-state-v1 protocol 2');
+    this.entity=true;this.fresh=true;this.journal=true;this.binary=true;
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,transientGroups:0,transientBytes:0,transientDropped:0,reliableBytes:0};
     this.listener = (m) => {
       const recipient = m.recipients?.find(value=>value.client===id);
@@ -35,14 +33,7 @@ export class GameSession {
       else if(m.type==='entityEdgeResults')peer.send('state',{...m,type:'entity-edge-results'});
       else if(m.type==='entityRegistry')peer.send('events',{type:'entity-registry',registry:m.registry});
       else if(m.type==='entityPacket')this.entityPacket(m);
-      else if(m.type==='journalTransients')this.unorderedSnapshot(m,TRANSIENTS_MAGIC,'transientVersion');
-      else if(m.type==='journalEvents')this.packet(m.buffer,undefined,m.sharedId,EVENTS_MAGIC);
-      else if(m.type==='journalPacket'){if(m.reliable&&(!this.fresh||m.initialBootstrap&&!this.joinBootstrapQueued)){if(this.fresh)this.joinBootstrapQueued=true;this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC,this.fresh?{epoch:m.snapshotEpoch,tick:m.snapshotTick,initialBootstrap:true}:undefined);}else if(!m.initialBootstrap)this.unorderedSnapshot(m);}
-      else if (m.type === 'packet') {
-        if (this.awaitKeyframe && !m.keyframe) return;
-        if (m.keyframe) this.awaitKeyframe = false;
-        this.packet(m.buffer,m.metadata,m.sharedId);
-      }
+      else if(m.type==='journalPacket'&&m.reliable&&m.initialBootstrap&&!this.joinBootstrapQueued){this.joinBootstrapQueued=true;this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC,{epoch:m.snapshotEpoch,tick:m.snapshotTick,initialBootstrap:true});}
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, binaryBulk:this.binary, ...m.player, playerId: m.player.unitId, tick: m.tick });
       else if(m.type==='inputAck'){if(this.fresh)peer.send('state',{...m,type:'input-ack'});}
       else if (m.type === 'fireAck') peer.send('events',m);
@@ -60,7 +51,7 @@ export class GameSession {
     });
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, entity:this.entity, journal:this.journal,fresh:this.fresh,transientSnapshots:!this.fresh&&this.journal&&peer.remote?.capabilities?.includes('snapshot-transients-v1')===true,relativeSnapshots:!this.fresh&&peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
+    world.postMessage({type:'join',client:id,spectator:peer.spectator,entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
   }
   message(label, m) {
     if(this.closed)return;

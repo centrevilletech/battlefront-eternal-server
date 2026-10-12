@@ -13,12 +13,12 @@ export class OnlineServer extends EventEmitter {
     this.certificate = loadCertificate(directory);
     this.master = new MasterClient({ url: config.master, keys: this.keys, noticeAccepted: config.onlineNoticeAccepted });
     this.bans = new BanCache(this.master, join(directory, 'master-ban-key'));
-    this.simulation = config.simulation ?? 'bfe-sim-2'; this.content = config.content ?? 'bfe-content-1';
+    this.simulation = 'bfe-sim-3'; this.content = config.content ?? 'bfe-content-1';
     this.master.on('signal', m => this.signal(m).catch(e => this.emit('fault', e.message)));
     this.master.on('disconnected', () => { if (!this.closed) this.reconnect(); });
   }
   listing() {
-    return { name: this.config.name, protocol: 1, simulation: this.simulation, content: this.content,
+    return { name: this.config.name, protocol: 2, profile: 'entity-state-v1', simulation: this.simulation, content: this.content,
       rotation: this.config.rotation, players: [...this.peers.values()].filter(p => p.authenticated).length,
       maxPlayers: this.config.maxPlayers ?? 64, relayPolicy: this.config.relayPolicy,
       endpoints: [], fingerprint: this.certificate.fingerprint };
@@ -63,7 +63,7 @@ export class OnlineServer extends EventEmitter {
       peer.once('closed', reason => {this.peers.delete(m.from);if(reason && reason!=='closed')console.warn('Online peer disconnected:',reason);});
       peer.on('fault', error => this.emit('fault', error));
       peer.once('ready', () => { if(this.isBanned(m.from)){peer.close();return;} new GameSession(peer, this.world, m.from, {
-        query: this.query, protocol: 1, simulation: this.simulation, content: this.content, serverId: this.id,
+        query: this.query, protocol: 2, profile: 'entity-state-v1', simulation: this.simulation, content: this.content, serverId: this.id,
       }); });
       peer.signal(signal);
       for (const candidate of this.pending.get(m.from) ?? []) peer.signal(candidate);

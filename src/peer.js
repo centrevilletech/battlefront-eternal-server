@@ -16,22 +16,19 @@ export class Peer extends EventEmitter {
     privateKey,
     ipFamily = 0,
     expectedKey,
-    protocol = 1,
-    simulation,
     content,
-    capabilities = [],
     iceUdpMuxPort = 0,
-    stateLifeMs = 0, stateBufferLimit = transportTuning.stateBufferLimit,
+    stateBufferLimit = transportTuning.stateBufferLimit,
     portable = process.env.BFE_PORTABLE_RTC === "1" || iceServers.some(
       (s) => s.relayType === "TurnTcp" || s.relayType === "TurnTls",
     ),
   }) {
     super();
     this.keys = keys;this.stateBufferLimit=stateBufferLimit;
-    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1','snapshot-relative-v1','snapshot-transients-v1','fresh-state-v1','entity-state-v1'].includes(value));
+
     this.initiator = initiator;
     this.expectedKey = expectedKey;
-    this.compatibility = { protocol, simulation, content };
+    this.compatibility = { protocol:2, simulation:"bfe-sim-3", profile:"entity-state-v1", content };
     this.channels = new Map();
     this.pendingCandidates = [];
     this.hasRemoteDescription = false;
@@ -83,7 +80,7 @@ export class Peer extends EventEmitter {
           this.channel(
             this.pc.createDataChannel(
               label,
-              label === "state" ? { unordered: true, ...(stateLifeMs?{maxPacketLifeTime:stateLifeMs}:{maxRetransmits:0}) } : {},
+              label === "state" ? { unordered: true, maxPacketLifeTime:50 } : {},
             ),
           );
       });
@@ -105,8 +102,8 @@ export class Peer extends EventEmitter {
     });
     ch.onMessage((raw) => {
       try {
-        if(typeof raw!=='string'&&label==='state'&&this.authenticated&&(this.initiator?this.capabilities.includes('entity-state-v1'):this.remote?.capabilities?.includes('entity-state-v1'))){const bytes=Buffer.from(raw),magic=this.initiator?0x31454e42:0x31494e42;if(bytes.length>1100||bytes.length<(this.initiator?30:16)||bytes.readUInt32LE(0)!==magic)throw Error('invalid entity message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
-        if(typeof raw!=='string' && (label==='bulk'||label==='state') && this.authenticated && (this.capabilities.includes('binary-bulk-v1')||this.capabilities.includes('snapshot-journal-v1')||label==='bulk'&&this.capabilities.includes('entity-state-v1'))){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
+        if(typeof raw!=='string'&&label==='state'&&this.authenticated){const bytes=Buffer.from(raw),magic=this.initiator?0x31454e42:0x31494e42;if(bytes.length>1100||bytes.length<(this.initiator?30:16)||bytes.readUInt32LE(0)!==magic)throw Error('invalid entity message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
+        if(typeof raw!=='string' && label==='bulk' && this.authenticated){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
         if (typeof raw !== "string" || Buffer.byteLength(raw) > 32768)
           throw Error("invalid message");
         const m = JSON.parse(raw);
@@ -147,7 +144,6 @@ export class Peer extends EventEmitter {
       JSON.stringify({
         type: "hello",
         nonce: this.nonce,
-        capabilities: this.capabilities,
         ...this.compatibility,
         publicKey: this.keys.publicKey,
       }),
@@ -163,7 +159,7 @@ export class Peer extends EventEmitter {
         .remoteDescription()
         .sdp.match(/a=fingerprint:([^\r\n]+)/)?.[1];
     return JSON.stringify([
-      "BFE/1",
+      "BFE/2",
       first,
       second,
       this.initiator ? local : remote,
@@ -182,9 +178,10 @@ export class Peer extends EventEmitter {
         typeof m.publicKey !== "string" ||
         m.publicKey.length !== 60 ||
         m.protocol !== this.compatibility.protocol ||
+        m.profile !== this.compatibility.profile ||
         m.simulation !== this.compatibility.simulation
       )
-        throw Error("incompatible peer");
+        {this.channels.get("events").sendMessage(JSON.stringify({type:"version-error",message:"Update required: protocol 2 / bfe-sim-3 / entity-state-v1"}));throw Error("Update required: incompatible protocol version");}
       if (this.expectedKey && keyId(m.publicKey) !== this.expectedKey)
         throw Error("unexpected identity");
       this.remote = m;

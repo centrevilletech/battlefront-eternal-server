@@ -25,6 +25,6 @@ test('authenticated native and portable peers exchange raw binary bulk in both d
   a.on('signal',value=>b.signal(value));b.on('signal',value=>a.signal(value));
   await Promise.all([new Promise(r=>a.once('ready',r)),new Promise(r=>b.once('ready',r))]);
   const frame=encodeBulkFrame({id:42,index:0,total:1,data:randomBytes(20000),metadata:{compact:1}});
-  for(const [sender,receiver,lane]of[[a,b,'bulk'],[b,a,'bulk'],[b,a,'state']]){const got=new Promise(r=>receiver.once('binary',r));assert(sender.sendBinary(frame,lane));assert.deepEqual(await got,frame);}
+  for(const [sender,receiver,lane]of[[a,b,'bulk'],[b,a,'bulk']]){const got=new Promise(r=>receiver.once('binary',r));assert(sender.sendBinary(frame,lane));assert.deepEqual(await got,frame);}
  }finally{a?.close();b?.close();rtc.cleanup();await rm(dir,{recursive:true,force:true});}
 });

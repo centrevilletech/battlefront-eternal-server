@@ -75,87 +75,32 @@ Local capacity testing uses `node --max-old-space-size=6144 scripts/load-peers.m
 
 Dedicated hosts default to native RTC and use UDP when allocating their own TURN relay. Remote clients can still reach that allocation through their own TCP or TLS relay connection. `BFE_PORTABLE_RTC=1` or configuration `portableRTC: true` selects the portable backend for desktop packaging or hosts requiring TCP/TLS-only egress. `node scripts/relay-smoke.mjs --mixed` checks native-host interoperability with portable TCP/TLS clients using the configured public connectivity infrastructure.
 
-Authenticated hello capabilities keep older clients compatible:
+All online, LAN and desktop HOST sessions require protocol 2, simulation
+`bfe-sim-3`, and profile `entity-state-v1`. Older clients receive an update-required
+version error. There is no capability negotiation or legacy gameplay fallback.
+The identity proof uses the `BFE/2` transcript and the same signed peer identities.
 
-- `compact-personal-v1` enables the private engine's compact personal metadata codec; other clients receive ordinary metadata.
-- `binary-bulk-v1` enables raw compressed replica frames and is confirmed by `welcome.binaryBulk`. A frame has a 16-byte little-endian header: magic `0x31424642`, packet ID (u32), fragment index (u16), fragment count (u16), and metadata byte length (u32). UTF-8 JSON metadata appears only in fragment zero, followed by at most 20,000 compressed bytes. Metadata is capped at 8,192 bytes; frames at 32,768 bytes; a packet at 128 fragments. Reset messages remain ordered JSON on the same bulk channel. Clients without the capability retain base64 JSON packets.
-- `input-state-v1` enables unreliable movement snapshots plus independent reliable action envelopes, confirmed by `welcome.inputMode: "split-v1"`. Reliable `actions` carry `epoch`, `id`, `tick`, `generation`, `actions`, and `human`; the worker binds the authenticated identity and acknowledges consumed actions with `ackActions`. Movement redundancy cannot discard a delayed reliable action.
-- `linear-projectiles-v1` enables shared linear projectile events only while every started client advertises support. A legacy client starting or a capable client leaving recomputes support and forces a fresh keyframe when the shared mode changes.
+One reliable registry/initial-world bootstrap establishes the scene. Ongoing
+state consists of independent absolute entity messages of at most 1100 bytes on
+an unordered channel with a fixed 50 ms lifetime. Each native admission receipt
+authorizes only that packet's membership ACK. Missing actors are unchanged;
+lifecycle removal requires a tombstone. Own correction schema 5 includes consumed
+and discarded input watermarks, authoritative held controls and view context.
 
-The load harness enables these capabilities by default. Use `--binary=0`, `--compact=0`, or `--linear=0` for comparisons. It excludes a five-second warmup from reported measurements (`--warmup=0` disables that). `--profile=/tmp/world.cpuprofile` captures the worker's V8 CPU profile; `node scripts/profile-summary.mjs /tmp/world.cpuprofile` prints the hottest call sites. Profile paths are local operator arguments and are never accepted from a remote peer.
+Compact BNI1 input carries held state, cumulative look and independent numbered
+edges. Durable receipt stops retransmission; explicit consumed/expired/cancelled
+results retire prediction only when an applied correction reaches their outcome
+tick. Consumption means the simulation received the control, not that a weapon
+fired or hit anything. Independent input ACKs never imply discarded input executed.
 
-The experimental `snapshot-journal-v1` capability is opt-in. It sends acknowledged
-checkpoint deltas on the unordered state channel, with bootstrap snapshots and
-compressed event batches on reliable bulk. Peers without this capability keep
-the existing ordered snapshot stream. Checkpoint ACKs are accepted only for
-snapshots published to that authenticated peer; expired baselines bootstrap
-again. This path is under qualification and is not enabled by default. Local
-qualification can select it with `node scripts/load-peers.mjs --players=2
---seconds=10 --journal=1`; these measurements exclude Internet TURN capacity.
+The fixed scheduler reserves nominal 20 Hz own correction and bounds offered
+state payload to 26,000 bytes/second with a 2,200-byte burst. Remaining credit
+admits remote-only messages, prioritizing nearby actors. Native admission age is
+separate from actual delivery age; control traffic and network overhead are
+outside this state budget.
 
-The additional opt-in `snapshot-transients-v1` capability moves stateless gunfire,
-impact sounds and brief animation flashes to deflated BFB4 frames on the unordered
-state channel. Effect handles and persistent animation transitions remain reliable.
-Expendable batches yield to reliable backlog, and each fragment group is admitted
-atomically. Clients without this capability keep the complete reliable event stream.
-Use `--journal=1 --transients=1` for local qualification; production clients do not
-enable this experimental mode by default.
-
-For isolated transport experiments, `BFE_EXPERIMENTAL_SCTP_SEND_BUFFER` sets the native SCTP send buffer (32768–1048576 bytes), `BFE_EXPERIMENTAL_STATE_BUFFER` sets the application state-channel admission threshold (1024–65536 bytes), and `BFE_EXPERIMENTAL_JOURNAL_FRAME` sets the journal fragment target (512–20000 bytes). Unset variables preserve existing defaults. These controls do not enable journal mode or change negotiated client reliability; they are diagnostic settings, not qualified production recommendations.
-
-The staged `fresh-state-v1` successor is opt-in and replaces recurring reliable
-snapshot dependencies. Its qualification invariants are:
-
-- Input consumption feedback travels on unordered state independently of world
-  decoding. It releases transport resend bookkeeping, never authoritative replay
-  history that still belongs to an older applied state.
-- Only a completely materialized/applied snapshot can be acknowledged. The
-  server accepts a baseline ACK only for an epoch/tick actually admitted to the
-  native sender for that authenticated peer, with monotonic advancement.
-- Every admitted journal snapshot can become a baseline. Ordinary publication
-  continues from the last confirmed baseline while newer ACKs are lost. There
-  is no pending-checkpoint stop-and-wait gate.
-- One bounded initial join snapshot uses reliable bulk. Its admission receipt is
-  recorded only after every fragment enters the native sender, and its immutable
-  baseline remains pinned until the client acknowledges it. Resyncs and epoch
-  changes never authorize another reliable world transfer.
-- Missing or evicted baselines trigger bounded-cadence newest absolute recovery,
-  never a recurring reliable checkpoint or replay of an indefinitely old
-  bootstrap. Late snapshots can populate immutable caches without rewinding the
-  rendered world.
-- Admission requires an empty state send buffer before compression and before
-  enqueue. Unsent superseded application work is discarded. This is a queue
-  bound, not an ACK-per-publication rate limit.
-- Snapshot history is bounded by count, age and conservatively accounted bytes;
-  only currently needed baselines are pinned. A confirmed pinned baseline does
-  not expire merely because its ACK was delayed. Membership/deletion remains exact
-  for this interim whole-world journal format.
-
-Tests must cover dropped/reordered ACKs, ACKs for offered-but-unsent snapshots,
-late candidates, epoch changes, history eviction, recovery freshness and input
-continuity during downstream blackholes. This interim format still uses whole
-world fragment groups and presentation calls. It does not satisfy the final
-per-entity, datagram-sized protocol or qualify 64-player performance. It will be
-retired with the legacy transport when the semantic entity successor passes the
-same acceptance gates; experimental modes are not permanent product choices.
-
-The harness-only `entity-state-v1` profile is the semantic replacement under
-construction. It has one reliable registry/initial-world bootstrap, then absolute
-entity messages of at most 1100 bytes on unordered state. Each native admission
-receipt authorizes only that packet's membership ACK. Missing actors in a message
-are unchanged; lifecycle removal requires a tombstone. Compact BNI1 input carries
-held state, cumulative look, and independent numbered edges. Durable edge receipt
-only stops retransmission; explicit consumed/expired/cancelled results retire
-prediction, and those results repeat until acknowledged. Consumption means the
-simulation received the control, not that a weapon fired or hit anything.
-
-This is an infantry/flyer integration prototype, not complete multiplayer parity.
-Ground-driver, turret and walker correction are unsupported; remote unsupported
-actors produce bounded diagnostics. World objectives, effects and other gameplay
-coverage remain in progress. The experimental profile reserves 20 Hz own correction and limits offered state
-payload to 26,000 bytes/second with a 2,200-byte burst. Remaining credit admits
-remote-only messages, with nearer actors weighted ahead of distant actors.
-Native admission age is exposed separately from actual client delivery age;
-control traffic and network overhead are outside that state budget. This profile
-has not qualified 64-player coverage, latency or bandwidth. This profile requires compact binary gameplay input; movement and numbered
-actions do not fall back to the legacy reliable JSON lane. No experimental profile is enabled for ordinary clients.
+This mandatory protocol still has implementation gaps: ground-driver, turret and
+walker correction are unsupported, and complete effects/gameplay parity and
+64-player latency, coverage and bandwidth qualification remain outstanding.
+Historical load scripts and transport reports describe retired protocols; use
+the private engine's current Chromium/netem harness for matched protocol-2 tests.

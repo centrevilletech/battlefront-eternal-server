@@ -1,7 +1,6 @@
 import { EntityBudget } from './entity-budget.js';
 import { EntityEdges } from './entity-edges.js';
 import { FreshStateWindow } from './fresh-state.js';
-import { updateRoomCapabilities } from './room-capabilities.js';
 import { Session } from 'node:inspector';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -40,7 +39,7 @@ try {
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
-  const updateLinear=()=>updateRoomCapabilities(world,clients);
+  const updateLinear=()=>world.setLinearProjectiles(true);
   let threadCpuStart=process.threadCpuUsage();
   const measurements = {sim:[],encode:[],total:[],droppedTicks:0,fireAccepted:0,fireRejected:0,journalBootstraps:0,journalCheckpointPackets:0};
   const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
@@ -53,7 +52,7 @@ try {
     const groups=new Map();
     let semanticRecords;
     for (const [client, state] of clients) if (state.started) {
-      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,ackActions:state.entity?0:actor.actions?.ack??0});}
+      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
         const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
         if(state.entityReady){
@@ -168,6 +167,7 @@ try {
       if(m.type==='resetMetrics'){threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
+        Object.assign(m,{entity:true,journal:true,fresh:true,compactMetadata:true,linearProjectiles:true,separateActions:true,relativeSnapshots:false,transientSnapshots:false});
         if (clients.has(m.client)) throw Error('already joined');
         if(m.entity&&!entityRuntime)throw Error('semantic entity runtime unavailable');
         if(m.entity&&m.spectator)throw Error('semantic spectator mode not implemented');
@@ -236,7 +236,7 @@ try {
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
         else if (m.method === 'inspect') {
           const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
-          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?{profile:'entity-v1-experimental',payloadBytesPerSecond:26000,burstBytes:2200,ownNominalHz:20,...clients.get(m.client).entityMetrics,offeredBytes:clients.get(m.client).entityBudget.offeredBytes,admissionAgeTicks:[...clients.get(m.client).entity.records.values()].map(entry=>({id:entry.record.id,kind:entry.record.kind,age:Number.isFinite(entry.last)?game.worldClock.tick-entry.last:null}))}:undefined,inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
+          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?{profile:'entity-v1',payloadBytesPerSecond:26000,burstBytes:2200,ownNominalHz:20,...clients.get(m.client).entityMetrics,offeredBytes:clients.get(m.client).entityBudget.offeredBytes,admissionAgeTicks:[...clients.get(m.client).entity.records.values()].map(entry=>({id:entry.record.id,kind:entry.record.kind,age:Number.isFinite(entry.last)?game.worldClock.tick-entry.last:null}))}:undefined,inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
         }
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
