@@ -21,7 +21,7 @@ test('finished matches replace the world and advance the configured playlist', {
   for(const name of ['capture','registry','codec','stream','input','edges','shots','combat','summary'])await writeFile(join(engine,`src/runtime/network-entity-${name}.js`),'export {};');
   await writeFile(join(engine,'src/runtime/network-entity-player.js'),'export const OWN_PLAYER_SCHEMA=8;');
   await writeFile(join(engine,'src/runtime/network-contract.js'),'export const NETWORK_CONTRACT='+JSON.stringify(CONTRACT)+';');
-  await writeFile(join(state,'config.json'),JSON.stringify({engine,data,rotation:['swbf1/nab2:rep:conquest','swbf1/bes2:all:conquest'],gamePort:0,discovery:false}));
+  await writeFile(join(state,'config.json'),JSON.stringify({engine,data,rotation:['swbf1/nab2:rep:conquest','swbf1/bes2:all:conquest'],gamePort:0,discovery:false,rotationDelayMs:300}));
   const child=spawn(process.execPath,['src/main.js','--serve'],{cwd:new URL('..',import.meta.url),env:{...process.env,BFE_STATE_DIR:state,PORT:'0'},stdio:['ignore','pipe','pipe']});
   let output=''; child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
   try {

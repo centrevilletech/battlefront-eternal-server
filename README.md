@@ -21,6 +21,10 @@ Each connected player receives up to `stateBytesPerSecond` of entity state
 (default 100000, about 800 kbit/s; a full 32 versus 32 field refreshed at 20 Hz
 uses about 85 KB/s of it); lower it in config.json for a host with little
 upstream bandwidth, at the cost of less frequent updates for distant actors.
+Players join at the spawn screen and may pick their side; `autoAssignTeams: true`
+keeps the roster's assignment and `autoSpawn: true` puts a joining player on the
+field at once. A finished battle shows its end table for ten seconds
+(`rotationDelayMs`) before the next map loads. The operator menu (and the desktop HOST) can restart the match.
 
 Accepting the online notice enables directory registration, 20-second
 heartbeats and master WebSocket rendezvous. `relayPolicy` accepts `auto`, `never`

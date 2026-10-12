@@ -105,7 +105,7 @@ async function menu() {
   }
 }
 async function adminMenu(io) {
-  console.log('1  Status and players\n2  Kick player\n3  Ban identity\n4  Unban identity\n5  Player statistics\n6  Server message');
+  console.log('1  Status and players\n2  Kick player\n3  Ban identity\n4  Unban identity\n5  Player statistics\n6  Server message\n7  Restart match');
   const choice=await io.question('Admin choice: ');
   let request;
   if(choice==='1')request={action:'status'};
@@ -114,6 +114,7 @@ async function adminMenu(io) {
   else if(choice==='4')request={action:'unban',id:await io.question('Identity: ')};
   else if(choice==='5')request={action:'stats',id:(await io.question('Identity (blank for recent players): '))||undefined};
   else if(choice==='6')request={action:'message',text:await io.question('Message: ')};
+  else if(choice==='7')request={action:'restart'};
   if(request)try{console.log(JSON.stringify(await operatorRequest(directory,request),null,2));}catch(e){console.error('Administration:',e.message);}
 }
 async function serve() {
@@ -128,6 +129,7 @@ async function serve() {
   const admin = operatorHandler(directory, async command => {
     if(command.action==='status')return {status,tick,pid:process.pid,startedAt,bans:operator.bans(),players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
     if(command.action==='stop'){setTimeout(()=>shutdown(),50);return {ok:true};}
+    if(command.action==='restart'){if(!rotate(false,RESTART_DELAY_MS))throw Error('No running match to restart');operator.audit('restart',null,'');return {ok:true};}
     if(command.action==='stats')return {players:operator.stats(command.id)};
     if(command.action==='metrics'||command.action==='reset-metrics'){
       if(!metricsEnabled||!world||status!=='running')throw Error('World metrics are not enabled');
@@ -171,6 +173,26 @@ async function serve() {
   });
   server.listen(Number(process.env.PORT ?? 18450), "127.0.0.1");
   let rotationIndex = 0, rotating = false;
+  // A finished battle shows its end table for this long before the next map
+  // loads; a restart asked by the host reloads the same map almost at once.
+  const ROTATION_DELAY_MS = Number.isSafeInteger(config.rotationDelayMs) ? Math.min(60000, Math.max(300, config.rotationDelayMs)) : 10000, RESTART_DELAY_MS = 3000;
+  // The next battle: clients are told now and follow once it is up; the world
+  // keeps running (its end table, the scores) until then.
+  function rotate(advance, delayMs) {
+    if (rotating || !world || status !== 'running') return false;
+    rotating = true;
+    if (advance) rotationIndex = (rotationIndex + 1) % config.rotation.length;
+    const [nextMap, nextSide] = config.rotation[rotationIndex].replace(/^swbf1\//, '').split(':');
+    const match = { query: `?map=${nextMap}&side=${nextSide}&ai=classic&seed=1`, delayMs };
+    online?.match(match); local?.match(match);
+    const current = world;
+    rotationTimer = setTimeout(async () => {
+      try { await online?.close(); await local?.close(); await current.terminate(); online = null; local = null; await launch(); }
+      catch (e) { status = 'fault'; error = e.message; console.error(e); }
+      finally { rotating = false; }
+    }, delayMs);
+    return true;
+  }
   async function launch() {
     error = null; tick = 0;
     const mission = config.rotation[rotationIndex];
@@ -186,6 +208,8 @@ async function serve() {
         maxPlayers: config.maxPlayers ?? 64,
         armySize:32,
         stateBytesPerSecond: config.stateBytesPerSecond,
+        autoSpawn: config.autoSpawn === true,
+        autoAssignTeams: config.autoAssignTeams === true,
         metrics:metricsEnabled,
         ...(metricsEnabled&&process.env.BFE_WORLD_PROFILE?{profile:resolve(process.env.BFE_WORLD_PROFILE)}:{}),
       },
@@ -209,17 +233,8 @@ async function serve() {
             await online.start(); console.log('Online server identity:', online.id);
           } catch (e) { error = e.message; console.error('Online registration:', e.message); }
         }
-      } else if (m.type === "finished" && !rotating) {
-        rotating = true;
-        rotationIndex = (rotationIndex + 1) % config.rotation.length;
-        const [nextMap,nextSide] = config.rotation[rotationIndex].replace(/^swbf1\//,'').split(':');
-        const match = { query:`?map=${nextMap}&side=${nextSide}&ai=classic&seed=1`, delayMs:8000 };
-        online?.match(match); local?.match(match);
-        rotationTimer = setTimeout(async () => {
-          try { await online?.close(); await local?.close(); await world.terminate(); online=null; local=null; await launch(); }
-          catch(e) { status='fault'; error=e.message; console.error(e); }
-          finally { rotating=false; }
-        }, 500);
+      } else if (m.type === "finished") {
+        rotate(true, ROTATION_DELAY_MS);
       } else if (m.type === "scores") operator.scores(m.match,m.players);
       else if (m.type === "tick") tick = m.tick;
       else if (m.type === "error") {
