@@ -1,3 +1,4 @@
+import {InputAdmission} from './input-admission.js';
 import {parentDiagnosticsEnabled,parentCount,parentDuration} from './parent-diagnostics.js';
 import {encodeBulkFrame,JOURNAL_MAGIC,EVENTS_MAGIC,TRANSIENTS_MAGIC} from './bulk-frame.js';
 import { deflate } from 'node:zlib';
@@ -24,6 +25,7 @@ export class GameSession {
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;
     if(peer.remote?.protocol!==2||peer.remote?.simulation!=='bfe-sim-5'||peer.remote?.profile!=='entity-state-v1'||typeof peer.sendBinary!=='function')throw Error('Update required: entity-state-v1 protocol 2');
     if(world.publication){this.publicationIncarnation=world.publicationSessionSerial=(world.publicationSessionSerial??0)+1;(world.publicationSessions??=new Map()).set(id,this);world.publication.leave(id);}
+    this.inputClock=options.inputClock??(()=>performance.now());this.inputAdmission=new InputAdmission({clock:this.inputClock});
     this.entity=true;this.fresh=true;this.journal=true;this.binary=true;
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,transientGroups:0,transientBytes:0,transientDropped:0,reliableBytes:0};
     this.listener = (m) => {
@@ -50,9 +52,10 @@ export class GameSession {
       if(!this.entity||label!=='state'||this.closed)return;
       parentCount('inputCallbacks');parentCount('inputBytes',buffer.byteLength);
       const bytes=Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
-      const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
+      const now=this.inputClock();if(this.entityInputWindow===undefined||now-this.entityInputWindow>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
       this.entityInputTimes.push(now-this.entityInputWindow);
-      if(++this.entityInputCount>120){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
+      this.entityInputCount++;
+      if(!this.inputAdmission.take()){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
       this.post({type:'entityInput',client:this.id,buffer:bytes});
     });
     peer.once('closed', () => this.close());
