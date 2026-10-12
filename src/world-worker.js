@@ -122,7 +122,7 @@ try {
         for (const command of m.commands.slice(0,32)) {
           const stats=clients.get(m.client).inputDiagnostics,accepted=world.input(m.client,command);
           stats[accepted?'accepted':'rejected']++;
-          stats.last.sequence=command?.sequence;stats.last.tick=command?.tick;stats.last.generation=command?.generation;stats.last.epoch=command?.epoch;stats.last.serverTick=game.worldClock.tick;stats.last.accepted=accepted;
+          stats.last.sequence=command?.sequence;stats.last.tick=command?.tick;stats.last.generation=command?.generation;stats.last.epoch=command?.epoch;stats.last.serverTick=game.worldClock.tick;stats.last.accepted=accepted;stats.last.lookTotal=Array.isArray(command?.lookTotal)?command.lookTotal.slice(0,2):null;stats.last.lookCount=Array.isArray(command?.look)?command.look.length:0;stats.last.down=Array.isArray(command?.down)?command.down.slice(0,32):[];
           if(!accepted){const reason=!command?'missing-command':Math.abs(command.tick-game.worldClock.tick)>120?'tick-window':command.epoch!==1?'epoch':'sequence-or-inactive';stats.reasons[reason]=(stats.reasons[reason]??0)+1;}
         }
       } else if (m.type === 'resync') clients.get(m.client) && (clients.get(m.client).keyframe = true);
@@ -135,7 +135,7 @@ try {
         else if (m.method === 'suspend') { clients.get(m.client).started = false; world.clearInput?.(m.client); updateLinear(); result.type = 'suspended'; }
         else if (m.method === 'resync') { clients.get(m.client) && (clients.get(m.client).keyframe = true); }
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
-        else if (m.method === 'inspect') result = { ...result, type: 'inspection', player, inputDiagnostics:clients.get(m.client).inputDiagnostics, players: clients.size, running: Boolean(timer) };
+        else if (m.method === 'inspect') result = { ...result, type: 'inspection', player:{...player,aimYaw:world.players.get(m.client)?.unit?.soldier?.aimYaw,aimPitch:world.players.get(m.client)?.unit?.soldier?.aimPitch}, inputDiagnostics:clients.get(m.client).inputDiagnostics, players: clients.size, running: Boolean(timer) };
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
         for (let i = 0; i < Math.min(m.count ?? 1, 600); i++) step();
