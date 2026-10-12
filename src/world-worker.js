@@ -1,3 +1,4 @@
+import { loadNetworkContract } from './network-contract.js';
 import { liveActorRoster } from './actor-roster.js';
 import { EntityEventStore } from './entity-event-store.js';
 import { entityImportance } from './entity-importance.js';
@@ -14,6 +15,7 @@ import { dataReader } from './content.js';
 globalThis.fetch = await dataReader(workerData.data);
 try {
   const root = resolve(workerData.engine);
+  const networkContract = await loadNetworkContract(root);
   const { createGame } = await import(pathToFileURL(resolve(root, 'src/game.js')));
   const { createMultiplayerWorld } = await import(pathToFileURL(resolve(root, 'src/runtime/multiplayer-world.js')));
   const { worldState } = await import(pathToFileURL(resolve(root, 'src/runtime/world-state.js')));
@@ -34,7 +36,7 @@ try {
     const combat=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-combat.js')));
     const summary=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-summary.js')));
     const player=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-player.js')));
-    if(player.OWN_PLAYER_SCHEMA!==8)throw Error('bfe-sim-5 requires own-player correction schema 8');
+    if(player.OWN_PLAYER_SCHEMA!==networkContract.ownCorrectionSchema)throw Error(`Engine contract requires own-player correction schema ${networkContract.ownCorrectionSchema}`);
     entityRuntime={...capture,...registry,...codec,...stream,...input,...edges,...shots,...summary,...combat};
   } catch(error) { throw new Error('Mandatory multiplayer engine runtime unavailable: '+error.message,{cause:error}); }
   let entityRegistry,entityCapture,entityShots,combatCapture,combatDispose;
@@ -185,7 +187,7 @@ try {
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
-  parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
+  parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content, networkContract });
   parentPort.on('message', async m => {
     try {
       if(m.type==='resetMetrics'){if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}

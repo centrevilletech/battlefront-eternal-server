@@ -1,3 +1,4 @@
+import { wireCompatibility } from './network-contract.js';
 import {encodeBulkFrame,JOURNAL_MAGIC,EVENTS_MAGIC,TRANSIENTS_MAGIC} from './bulk-frame.js';
 import { deflate } from 'node:zlib';
 import { transportTuning } from './transport-tuning.js';
@@ -21,7 +22,8 @@ export class GameSession {
   constructor(peer, world, id, welcome, options={}) {
     this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??transportTuning.journalFrameBytes));
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;
-    if(peer.remote?.protocol!==2||peer.remote?.simulation!=='bfe-sim-5'||peer.remote?.profile!=='entity-state-v1'||typeof peer.sendBinary!=='function')throw Error('Update required: entity-state-v1 protocol 2');
+    const wire=wireCompatibility(world.networkContract);
+    if(Object.entries(wire).some(([key,value])=>peer.remote?.[key]!==value)||typeof peer.sendBinary!=='function')throw Error('Update required: entity-state-v1 protocol 2');
     this.entity=true;this.fresh=true;this.journal=true;this.binary=true;
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,transientGroups:0,transientBytes:0,transientDropped:0,reliableBytes:0};
     this.listener = (m) => {

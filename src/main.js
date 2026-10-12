@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { validateNetworkContract } from './network-contract.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
@@ -164,6 +165,7 @@ async function serve() {
         tick,
         error,
         multiplayerReady: status === "running" && Boolean(local),
+        networkContract: world?.networkContract ?? null,
       }),
     );
   });
@@ -190,6 +192,8 @@ async function serve() {
     status = "loading";
     world.on("message", async (m) => {
       if (m.type === "ready") {
+        try { world.networkContract = validateNetworkContract(m.networkContract); }
+        catch (e) { status="fault";error=e.message;await world.terminate();return; }
         status = "running";
         config.content = m.content;
         const activeConfig = { ...config, rotation:[...config.rotation.slice(rotationIndex), ...config.rotation.slice(0,rotationIndex)] };

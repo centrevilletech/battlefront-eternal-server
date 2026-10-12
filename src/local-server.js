@@ -1,12 +1,13 @@
+import { validateNetworkContract, wireCompatibility } from './network-contract.js';
 import http from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Peer } from './peer.js';
 import { GameSession } from './game-session.js';
 import { startLanDiscovery } from './lan.js';
 export async function startLocalServer({ config, identity, certificate, world, query, isBanned = () => false }) {
+  const contract=validateNetworkContract(world.networkContract),wire=wireCompatibility(contract);
   const peers = new Set(), sockets = new Set();
-  const info = () => ({ id: identity.id, name: config.name, protocol: 2, profile: 'entity-state-v1',
-    simulation: 'bfe-sim-5', content: config.content ?? 'bfe-content-1',
+  const info = () => ({ id: identity.id, name: config.name, ...wire, content: config.content ?? 'bfe-content-1',
     rotation: config.rotation, players: [...peers].filter(p=>p.authenticated).length,
     maxPlayers: config.maxPlayers ?? 64, relayPolicy: 'never', fingerprint: certificate.fingerprint,
     query, port: config.gamePort ?? 18451 });
@@ -19,7 +20,7 @@ export async function startLocalServer({ config, identity, certificate, world, q
   websocket.on('connection', socket => {
     if(sockets.size >= (config.maxPlayers ?? 64)*2) {socket.close();return;}
     sockets.add(socket);
-    const peer=new Peer({name:'lan-client',keys:identity.keys,simulation:info().simulation,content:info().content,portable:process.env.BFE_PORTABLE_RTC==='1'||config.portableRTC===true,...certificate});
+    const peer=new Peer({name:'lan-client',keys:identity.keys,contract,content:info().content,portable:process.env.BFE_PORTABLE_RTC==='1'||config.portableRTC===true,...certificate});
     peer.once('closed',reason=>{if(reason && reason!=='closed')console.warn('LAN peer disconnected:',reason);});
     peers.add(peer); let count=0; const timeout=setTimeout(()=>peer.close(),30000);
     peer.on('signal',s=>{if(socket.readyState===WebSocket.OPEN&&socket.bufferedAmount<65536)socket.send(JSON.stringify(s));});

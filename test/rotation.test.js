@@ -1,3 +1,4 @@
+import { CONTRACT } from './contract-fixture.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
@@ -19,15 +20,16 @@ test('finished matches replace the world and advance the configured playlist', {
   // Rotation exercises no players, but the mandatory engine API must import.
   for(const name of ['capture','registry','codec','stream','input','edges','shots','combat','summary'])await writeFile(join(engine,`src/runtime/network-entity-${name}.js`),'export {};');
   await writeFile(join(engine,'src/runtime/network-entity-player.js'),'export const OWN_PLAYER_SCHEMA=8;');
+  await writeFile(join(engine,'src/runtime/network-contract.js'),'export const NETWORK_CONTRACT='+JSON.stringify(CONTRACT)+';');
   await writeFile(join(state,'config.json'),JSON.stringify({engine,data,rotation:['swbf1/nab2:rep:conquest','swbf1/bes2:all:conquest'],gamePort:0,discovery:false}));
   const child=spawn(process.execPath,['src/main.js','--serve'],{cwd:new URL('..',import.meta.url),env:{...process.env,BFE_STATE_DIR:state,PORT:'0'},stdio:['ignore','pipe','pipe']});
   let output=''; child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
   try {
     let matches=[];
-    for(let n=0;n<100;n++){try{matches=(await readFile(log,'utf8')).trim().split('\n')}catch{}if(matches.length>=3)break;await new Promise(r=>setTimeout(r,100));}
+    for(let n=0;n<100;n++){assert.equal(child.exitCode,null,output);try{matches=(await readFile(log,'utf8')).trim().split('\n')}catch{}if(matches.length>=3)break;await new Promise(r=>setTimeout(r,100));}
     assert(matches.length>=3,output);
     assert.match(matches[0],/map=nab2&side=rep/);
     assert.match(matches[1],/map=bes2&side=all/);
     assert.match(matches[2],/map=nab2&side=rep/);
-  } finally { const exited=once(child,'exit');child.kill('SIGTERM');await exited;await rm(root,{recursive:true,force:true}); }
+  } finally { if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited;}await rm(root,{recursive:true,force:true}); }
 });
