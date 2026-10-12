@@ -202,7 +202,8 @@ async function serve() {
       else if(m.type==='publicationFatal'){status='fault';error=m.message;await online?.close();await local?.close();await matchWorld.terminate();}
       else if (m.type === "ready") {
         if(process.env.BFE_PUBLICATION_WORKER==='1'){
-          publication=matchWorld.publication=new PublicationCoordinator({engine:config.engine,maxClients:(config.maxPlayers??64)*3,send:(message)=>{if(message.type==='publicationBatchDone')queueMicrotask(()=>publication.processed(message));else matchWorld.emit('message',message);},report:message=>console.error('Publication worker:',message),fatal:message=>matchWorld.emit('message',{type:'publicationFatal',message})});
+          const {encodeEntityPacket}=await import(pathToFileURL(resolve(config.engine,'src/runtime/network-entity-codec.js')));
+          publication=matchWorld.publication=new PublicationCoordinator({engine:config.engine,encodeOwn:fields=>encodeEntityPacket(fields,1100),maxClients:(config.maxPlayers??64)*3,send:(message)=>{if(message.type==='publicationBatchDone')queueMicrotask(()=>publication.processed(message));else matchWorld.emit('message',message);},report:message=>console.error('Publication worker:',message),fatal:message=>matchWorld.emit('message',{type:'publicationFatal',message})});
         }
         if(publication?.closed)return;
         status = "running";

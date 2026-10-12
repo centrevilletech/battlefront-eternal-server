@@ -28,9 +28,9 @@ parentPort.on('message',message=>{
    for(const record of recipient.summaries)scheduler.update(record,4);
    for(const event of events)scheduler.updateEvent({...event,record:event.prepared},[event.view.ownerId,event.view.targetId,event.view.attackerId].includes(recipient.unitId)?24:entityImportance(event.view,recipient.interest));
    scheduler.serial=message.packetBase;
-   const offer=(packet,ownCorrection)=>{if(!packet||!state.budget.take(packet.buffer.byteLength,begun))return false;const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);packets.push({type:'entityPacket',client:recipient.client,sessionIncarnation:state.incarnation,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs:capture.capturedAtUnixMs,buffer});return true;};
+   const offer=(packet,ownCorrection)=>{if(!packet||!workerData.parentBudget&&!state.budget.take(packet.buffer.byteLength,begun))return false;const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);packets.push({type:'entityPacket',client:recipient.client,sessionIncarnation:state.incarnation,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs:capture.capturedAtUnixMs,buffer});return true;};
    const fields={tick:capture.tick,...recipient.fields},packet=scheduler.packet({...fields,own:recipient.own});
-   if(offer(packet,!!recipient.own)){const maxBytes=Math.min(1100,state.budget.available(begun));if(maxBytes>30)offer(scheduler.packet({...fields,maxBytes,excludePacketIds:[packet.packetId]}),false);}
+   if(offer(packet,!!recipient.own)){const maxBytes=workerData.parentBudget?1100:Math.min(1100,state.budget.available(begun));if(maxBytes>30)offer(scheduler.packet({...fields,maxBytes,excludePacketIds:[packet.packetId]}),false);}
   }
   const elapsed=performance.now()-begun;jobs++;totalMs+=elapsed;maxMs=Math.max(maxMs,elapsed);
   parentPort.postMessage({type:'result',id:message.id,incarnation:message.incarnation,packets,metrics:{jobs,totalMs,maxMs,cpu:process.threadCpuUsage(cpuStart),clients:clients.size}},packets.map(p=>p.buffer));

@@ -129,7 +129,7 @@ export class GameSession {
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;rejected('ownDroppedNative');return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
-    (this.world.publication?message=>{this.world.publication.packetResult(message);this.world.publication.receipt('admitted',message);}:message=>this.post(message))({type:'entitySent',client:this.id,...(m.sessionIncarnation===undefined?{}:{sessionIncarnation:m.sessionIncarnation,ageMs}),epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
+    (this.world.publication?message=>{this.world.publication.packetResult(message);this.world.publication.receipt('admitted',message);}:message=>this.post(message))({type:'entitySent',client:this.id,...(m.sessionIncarnation===undefined?{}:{sessionIncarnation:m.sessionIncarnation,ageMs,payloadBytes:bytes.length}),epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
   }
   async unorderedSnapshot(m,magic=JOURNAL_MAGIC,versionSlot='snapshotVersion') {
     const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);
