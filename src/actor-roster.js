@@ -2,8 +2,8 @@
 // records the transport happened to capture or deliver: omitted actors matter.
 export function liveActorRoster(game) {
   const soldiers = game.units.all().filter(unit => unit.soldier && unit.combat && unit.alive && !unit.removed)
-    .map(unit => ({kind: 'soldier', id: unit.id, generation: unit.generation}));
+    .map(unit => ({kind: 'soldier', id: unit.id, generation: unit.generation, position: unit.position?.toArray?.() ?? null}));
   const vehicles = game.vehicles.vehicles.filter(vehicle => vehicle.alive)
-    .map(vehicle => ({kind: 'vehicle', id: vehicle.aiTarget.id, generation: vehicle.aiTarget.generation}));
+    .map(vehicle => ({kind: 'vehicle', id: vehicle.aiTarget.id, generation: vehicle.aiTarget.generation, position: vehicle.position?.toArray?.() ?? null}));
   return {tick: game.worldClock.tick, actors: [...soldiers, ...vehicles]};
 }
