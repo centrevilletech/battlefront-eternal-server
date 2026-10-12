@@ -221,7 +221,7 @@ try {
         }
         // Players join at the spawn screen and choose their side unless the
         // operator configured autoSpawn / autoAssignTeams (the original's SET GAME OPTIONS).
-        await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
+        await world.addPlayer(m.client, { spectator: m.spectator, name: typeof m.name === 'string' && m.name ? m.name.slice(0, 32) : 'Player', reliableFire:true, separateActions:m.separateActions===true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
         clients.set(m.client, { started: false, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,entityBudget:m.entity?new EntityBudget(stateBudget):null,entityMetrics:{ownOffered:0,remoteOffered:0,admitted:0,budgetDropped:0,lastOwnTick:null},compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
         if(m.entity)clients.get(m.client).entityEdges=new EntityEdges({Receiver:entityRuntime.EntityEdgeReceiver,actor:world.players.get(m.client),world,client:m.client,registry:entityRegistry});
         if(m.entity)parentPort.postMessage({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
@@ -238,6 +238,7 @@ try {
         }
         for(const packetId of packet.receipts)state.entity.ack({epoch:packet.epoch,packetId});
       }
+      else if(m.type==='playerLink'){const actor=world.players.get(m.client);if(actor&&Number.isFinite(m.rtt))actor.link={rtt:m.rtt,path:m.path&&typeof m.path==='object'?{kind:String(m.path.kind||''),family:String(m.path.family||'')}:null};}
       else if(m.type==='entityEdgeAck'){clients.get(m.client)?.entityEdges?.acknowledge(m);}
       else if(m.type==='entitySent'){const state=clients.get(m.client);if(m.epoch===1&&state?.entity?.admitted(m.packetId)){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}
       else if(m.type==='entityAck'){clients.get(m.client)?.entity?.ack({epoch:m.epoch,packetId:m.packetId});}
@@ -258,7 +259,7 @@ try {
         if (!sender || !clients.get(m.client)?.started) return;
         for (const [client, state] of clients) {
           if (!state.started || (m.team && world.player(client)?.team !== sender.team)) continue;
-          parentPort.postMessage({ type:'chat',client,text:m.text,team:m.team,playerId:sender.unitId,sender:`Player ${sender.unitId}` });
+          parentPort.postMessage({ type:'chat',client,text:m.text,team:m.team,playerId:sender.unitId,sender:world.players.get(m.client)?.character?.name || `Player ${sender.unitId}` });
         }
       } else if (m.type === 'inputs') {
         if (!clients.get(m.client)?.started) return;

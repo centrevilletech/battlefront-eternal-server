@@ -66,11 +66,13 @@ export class Peer extends EventEmitter {
       this.emit("state", state);
       if (["failed", "closed"].includes(state)) this.close(`rtc-${state}`);
     });
+    // A ping every few seconds: the idle timeout, and the round trip the
+    // roster shows as PING.
     this.timer = setInterval(() => {
       if (Date.now() - this.lastTraffic > 30000) this.close("idle-timeout");
       else if (this.authenticated)
         this.send("events", { type: "ping", time: Date.now() });
-    }, 10000);
+    }, 4000);
     this.timer.unref();
     this.authTimer = setTimeout(() => {
       if (!this.authenticated) this.close("authentication-timeout");

@@ -19,6 +19,12 @@ function compress(world, buffer, sharedId) {
   if(sharedId!==undefined){cache.set(sharedId,promise);while(cache.size>128)cache.delete(cache.keys().next().value);}
   return promise;
 }
+// The name a peer offered in its hello, as the roster, the scores and chat
+// will show it: printable, trimmed, bounded; absent means the generic name.
+export function playerName(value) {
+  const text = String(value ?? '').replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 32);
+  return text || 'Player';
+}
 // Fixed entity protocol above authenticated WebRTC: one reliable join baseline,
 // then independent entity state and compact inputs on the unordered channel.
 export class GameSession {
@@ -56,9 +62,12 @@ export class GameSession {
       if(++this.entityInputCount>120){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
       this.world.postMessage({type:'entityInput',client:this.id,buffer:bytes});
     });
+    // Each measured round trip, with the selected path, for the roster the
+    // world sends everyone (the Tab player list's PING and CONNECTION).
+    peer.on('ping', rtt => { if (!this.closed) this.world.postMessage({ type: 'playerLink', client: id, rtt, path: peer.path?.() ?? null }); });
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({type:'join',client:id,spectator:peer.spectator,entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
+    world.postMessage({type:'join',client:id,spectator:peer.spectator,name:playerName(peer.remote?.name),entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});
   }
   message(label, m) {
     if(this.closed)return;
