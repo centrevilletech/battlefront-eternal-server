@@ -48,6 +48,6 @@ export class EntityEdges {
       this.pending.delete(key);this.result(id,outcome.status);
     }
   }
-  acknowledge({epoch,generation,ids}) {if(epoch!==this.epoch||generation!==this.generation)return;for(const id of ids)this.results.delete(id);}
+  acknowledge({epoch,generation,ids}) {if(epoch!==this.epoch||generation!==this.generation)return;for(const id of ids)this.results.delete(id);this.received=this.received.filter(id=>!ids.includes(id));}
   feedback() {return {epoch:this.epoch,generation:this.generation,received:this.received.slice(),results:[...this.results.values()].slice(0,32)};}
 }

@@ -19,7 +19,7 @@ test('reordered external IDs translate to monotonic internal IDs and acceptance 
  assert.deepEqual(calls.map(c=>c.message.id),[1,2]);assert.deepEqual(edges.feedback().received,[9,8]);assert.deepEqual(edges.feedback().results,[]);
  actor.actions.outcomes.push({id:1,status:'consumed'});edges.consumed();assert.deepEqual(edges.feedback().results,[{id:9,status:'consumed'}]);
  edges.acknowledge({epoch:1,generation:3,ids:[9]});assert.equal(edges.feedback().results.length,1);
- edges.acknowledge({epoch:1,generation:2,ids:[9]});assert.equal(edges.feedback().results.length,0);
+ edges.acknowledge({epoch:1,generation:2,ids:[9]});assert.equal(edges.feedback().results.length,0);assert.deepEqual(edges.feedback().received,[8]);
  actor.actions.outcomes.push({id:2,status:'cleared'});edges.consumed();assert.deepEqual(edges.feedback().results,[{id:8,status:'cleared'}]);
 });
 test('duplicate accepted clicks do not fire twice and unknown spawn prerequisites are explicit',()=>{
