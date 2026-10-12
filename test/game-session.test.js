@@ -24,13 +24,13 @@ test('mandatory entity initial join admits only after all reliable fragments and
 });
 
 test('semantic packets are unfragmented and only native admission authorizes exact membership ACK',()=>{
- const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');let buffered=1,accept=true,sends=0;
- peer.channels=new Map([['state',{bufferedAmount:()=>buffered}]]);peer.sendStatePacket=(frames,options)=>{assert.equal(frames.length,1);assert.equal(options.maxBuffered,0);sends++;return accept;};
+ const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');let buffered=4401,accept=true,sends=0;
+ peer.channels=new Map([['state',{bufferedAmount:()=>buffered}]]);peer.sendStatePacket=(frames,options)=>{assert.equal(frames.length,1);assert.equal(options.maxBuffered,4400);sends++;return accept;};
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try {
   assert(world.sent[0].entity);const buffer=Buffer.alloc(1100);buffer.writeUInt32LE(0x31454e42);const message={type:'entityPacket',client:'player',epoch:1,packetId:2,buffer};
   world.emit('message',message);assert.equal(sends,0);assert.equal(world.sent.length,1);
-  buffered=0;accept=false;world.emit('message',message);assert.equal(world.sent.length,1);
+  buffered=4400;accept=false;world.emit('message',message);assert.equal(world.sent.length,1);
   accept=true;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entitySent',client:'player',epoch:1,packetId:2,ownCorrection:false,tick:0});
   peer.emit('message','state',{type:'entity-ack',epoch:1,packetId:2,client:'victim'});
   assert(world.sent.some(m=>m.type==='entityAck'&&m.client==='player'&&m.packetId===2));

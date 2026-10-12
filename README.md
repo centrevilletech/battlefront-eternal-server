@@ -17,6 +17,10 @@ UDP discovery uses port 18452, HTTP `/info` and WebSocket `/signal` use port 184
 and the diagnostic `/healthz` listener stays on loopback port 18450. The local
 signaling listener binds `::` with IPv4 dual-stack support; set `bind` and `gamePort` in config.json to
 change it. Clients verify Ed25519 identities bound to both DTLS fingerprints.
+Each connected player receives up to `stateBytesPerSecond` of entity state
+(default 100000, about 800 kbit/s; a full 32 versus 32 field refreshed at 20 Hz
+uses about 85 KB/s of it); lower it in config.json for a host with little
+upstream bandwidth, at the cost of less frequent updates for distant actors.
 
 Accepting the online notice enables directory registration, 20-second
 heartbeats and master WebSocket rendezvous. `relayPolicy` accepts `auto`, `never`

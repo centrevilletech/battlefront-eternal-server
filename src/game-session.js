@@ -3,6 +3,9 @@ import {encodeBulkFrame,JOURNAL_MAGIC,EVENTS_MAGIC,TRANSIENTS_MAGIC} from './bul
 import { deflate } from 'node:zlib';
 import { transportTuning } from './transport-tuning.js';
 const sharedCompression = new WeakMap();
+// Buffered state bytes beyond which a fresh entity packet is dropped rather
+// than queued: about four 1,100-byte datagrams.
+export const STATE_BACKLOG_BYTES=4400;
 export const compressionStats = { calls:0, durations:[] };
 function compress(world, buffer, sharedId) {
   let cache=sharedCompression.get(world);
@@ -122,9 +125,12 @@ export class GameSession {
     if(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250){this.transportCounters.stateDropped++;return;}
     const bytes=Buffer.from(m.buffer);
     if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
-    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>0){this.transportCounters.stateDropped++;return;} }
+    // State is expendable: never queue it behind a congested channel. A few
+    // datagrams still in the transport's hands (an asynchronous send, one
+    // publication's burst) are not congestion and must not cost a refresh.
+    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>STATE_BACKLOG_BYTES){this.transportCounters.stateDropped++;return;} }
     catch { this.peer.close('channel-state-send-failed');return; }
-    const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
+    const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:STATE_BACKLOG_BYTES})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
     this.world.postMessage({type:'entitySent',client:this.id,epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});

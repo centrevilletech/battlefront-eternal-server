@@ -185,6 +185,7 @@ async function serve() {
         query,
         maxPlayers: config.maxPlayers ?? 64,
         armySize:32,
+        stateBytesPerSecond: config.stateBytesPerSecond,
         metrics:metricsEnabled,
         ...(metricsEnabled&&process.env.BFE_WORLD_PROFILE?{profile:resolve(process.env.BFE_WORLD_PROFILE)}:{}),
       },
