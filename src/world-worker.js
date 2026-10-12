@@ -298,6 +298,8 @@ try {
         }, 5);
       } else if (m.type === 'stop') { clearInterval(timer); timer = null; }
     } catch(e) {
+      // Keep malformed input diagnosis without logging identity or input payloads.
+      console.warn('world-request-rejected',JSON.stringify({type:String(m.type).slice(0,40),correlated:m.id!==undefined,error:String(e.message).slice(0,180)}));
       sendParent(m.client ? { type: 'reply', client: m.client, id: m.id, error: e.message } : { type: 'error', message: e.message, stack: e.stack });
     }
   });
