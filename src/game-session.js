@@ -113,7 +113,7 @@ export class GameSession {
     try {
       const compressed=await compress(this.world,m.buffer,m.sharedId);
       if(this.closed||version!==this[versionSlot]||stateBusy()||expendable&&reliableBusy()){this.transportCounters[counter+'Dropped']++;return;}
-      if(this.fresh)m={...m,metadata:{...m.metadata,transportTiming:{capturedAtUnixMs:m.capturedAtUnixMs,compressionStartedAtUnixMs:compressed.compressionStartedAtUnixMs,compressionFinishedAtUnixMs:compressed.compressionFinishedAtUnixMs,offeredAtUnixMs:Date.now()}}};
+      if(this.journal)m={...m,metadata:{...m.metadata,transportTiming:{capturedAtUnixMs:m.capturedAtUnixMs,compressionStartedAtUnixMs:compressed.compressionStartedAtUnixMs,compressionFinishedAtUnixMs:compressed.compressionFinishedAtUnixMs,offeredAtUnixMs:Date.now()}}};
       const data=compressed.buffer,id=++this.serial,size=Math.max(256,Math.ceil(data.length/128),this.journalFrameBytes-Buffer.byteLength(JSON.stringify(m.metadata??{}))-16),total=Math.ceil(data.length/size);
       const frames=[];for(let index=0;index<total;index++)frames.push(encodeBulkFrame({magic,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}));
       let accepted=true;

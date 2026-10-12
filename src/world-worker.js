@@ -74,6 +74,7 @@ try {
             batch.recipients.push(recipient);if(plan.baseTick===null)measurements.journalBootstraps++;
             continue;
           }
+          if(state.pendingCheckpoint&&!journal.snapshots.has(state.pendingCheckpoint.tick)){journal.unpin(recipient.client+':pending');state.pendingCheckpoint=null;}
           const ack=state.snapshotAck;
           let baseTick=ack?.epoch===journal.epoch && journal.snapshots.has(ack.tick)?ack.tick:null;
           if(baseTick===journal.current.tick)continue;
@@ -82,7 +83,7 @@ try {
           const checkpoint=reliable||!state.pendingCheckpoint&&journal.current.tick%15===0;
           const key=`journal:${journal.epoch}:${journal.current.tick}:${baseTick}:${checkpoint}:${state.relativeSnapshots}`;
           let batch=encoded.get(key);
-          if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick,checkpoint,relativeVectors:state.relativeSnapshots}),reliable:checkpoint,recipients:[]});
+          if(!batch)encoded.set(key,batch={type:'journalPacket',sharedId:key,buffer:journal.encode({baseTick,checkpoint,relativeVectors:state.relativeSnapshots}),reliable:checkpoint,capturedAtUnixMs,recipients:[]});
           batch.recipients.push(recipient);
           if(checkpoint){measurements.journalCheckpointPackets++;journal.pin(recipient.client+':pending',journal.current.tick);state.pendingCheckpoint={epoch:journal.epoch,tick:journal.current.tick};state.checkpoints.set(journal.current.tick,journal.epoch);while(state.checkpoints.size>16)state.checkpoints.delete(state.checkpoints.keys().next().value);}
           if(reliable){measurements.journalBootstraps++;state.bootstrapAt=now;state.bootstrapEpoch=journal.epoch;}
