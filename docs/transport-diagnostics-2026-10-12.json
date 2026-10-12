@@ -309,6 +309,49 @@
         "relative": false,
         "transients": false
       }
+    },
+    {
+      "scenario": "Chromium, journal + lifetime 100 ms + transient events + loss",
+      "sourceReport": "chromium-ttl-transients.json",
+      "source": {
+        "engine": {
+          "revision": "e71260454e633b2a897d88ad35590842855e836d",
+          "dirty": true
+        },
+        "server": {
+          "revision": "f2200900a472c3c68cb3e11d0434c351d8a64bd5",
+          "dirty": false
+        }
+      },
+      "stateAgeP95Ms": 4266.666666666667,
+      "stateAgeMaxMs": 4400,
+      "actionP95Ms": 3886.7999999523163,
+      "connected": 2,
+      "errors": [],
+      "impairment": {
+        "kind": "Linux tc netem on isolated namespace UDP traffic",
+        "delayEachDirectionMs": 50,
+        "jitterMs": 0,
+        "packetLossPercent": 5.0
+      },
+      "negotiated": [
+        {
+          "journal": true,
+          "transients": true,
+          "stateLifeMs": 100
+        },
+        {
+          "journal": true,
+          "transients": true,
+          "stateLifeMs": 100
+        }
+      ],
+      "requestedProtocol": {
+        "journal": true,
+        "relative": false,
+        "transients": true
+      }
     }
-  ]
+  ],
+  "conclusion": "Keep journal, finite state lifetime, and transient events opt-in. A 100 ms state lifetime removes most queue growth in these short loss tests, but latency and capacity gates remain unmet. The transient event comparison regressed and must not become the default. Random netem loss patterns were not seeded; longer repeat trials are still required."
 }
