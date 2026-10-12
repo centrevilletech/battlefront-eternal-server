@@ -1,4 +1,4 @@
-import {encodeBulkFrame,JOURNAL_MAGIC,EVENTS_MAGIC} from './bulk-frame.js';
+import {encodeBulkFrame,JOURNAL_MAGIC,EVENTS_MAGIC,TRANSIENTS_MAGIC} from './bulk-frame.js';
 import { deflate } from 'node:zlib';
 const sharedCompression = new WeakMap();
 export const compressionStats = { calls:0, durations:[] };
@@ -25,7 +25,8 @@ export class GameSession {
       const recipient = m.recipients?.find(value=>value.client===id);
       if (m.client !== id && !recipient) return;
       if(recipient)m={...m,...recipient};
-      if(m.type==='journalEvents')this.packet(m.buffer,undefined,m.sharedId,EVENTS_MAGIC);
+      if(m.type==='journalTransients')this.unorderedSnapshot(m,TRANSIENTS_MAGIC,'transientVersion');
+      else if(m.type==='journalEvents')this.packet(m.buffer,undefined,m.sharedId,EVENTS_MAGIC);
       else if(m.type==='journalPacket'){if(m.reliable)this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC);else this.unorderedSnapshot(m);}
       else if (m.type === 'packet') {
         if (this.awaitKeyframe && !m.keyframe) return;
@@ -42,7 +43,7 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, journal:this.journal,relativeSnapshots:peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, journal:this.journal,transientSnapshots:this.journal&&peer.remote?.capabilities?.includes('snapshot-transients-v1')===true,relativeSnapshots:peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
     if(this.closed)return;
@@ -90,14 +91,16 @@ export class GameSession {
   }
   allowResync() {const now=performance.now();if(now-(this.lastResync??-Infinity)<1000)return false;this.lastResync=now;return true;}
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
-  async unorderedSnapshot(m) {
-    const version=this.snapshotVersion=(this.snapshotVersion??0)+1;
+  async unorderedSnapshot(m,magic=JOURNAL_MAGIC,versionSlot='snapshotVersion') {
+    const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);
+    const expendable=magic===TRANSIENTS_MAGIC;
+    const reliableBusy=()=>this.pending.length||this.queue.length||this.inflight||(this.peer.channels?.get('bulk')?.bufferedAmount()??0)>0;
     if(m.buffer.byteLength>2*1024*1024)return this.peer.close('snapshot-memory-limit');
     try {
       const compressed=await compress(this.world,m.buffer,m.sharedId);
-      if(this.closed||version!==this.snapshotVersion)return;
+      if(this.closed||version!==this[versionSlot]||expendable&&reliableBusy())return;
       const data=compressed.buffer,id=++this.serial,size=Math.max(256,Math.ceil(data.length/128),this.journalFrameBytes-Buffer.byteLength(JSON.stringify(m.metadata??{}))-16),total=Math.ceil(data.length/size);
-      const frames=[];for(let index=0;index<total;index++)frames.push(encodeBulkFrame({magic:JOURNAL_MAGIC,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}));
+      const frames=[];for(let index=0;index<total;index++)frames.push(encodeBulkFrame({magic,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}));
       if(this.peer.sendStatePacket)this.peer.sendStatePacket(frames);else for(const frame of frames)if(!this.peer.sendBinary(frame,'state'))break;
     }catch{this.peer.close('snapshot-compression-error');}
   }

@@ -27,7 +27,7 @@ export class Peer extends EventEmitter {
   }) {
     super();
     this.keys = keys;this.stateBufferLimit=stateBufferLimit;
-    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1','snapshot-relative-v1'].includes(value));
+    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1','snapshot-relative-v1','snapshot-transients-v1'].includes(value));
     this.initiator = initiator;
     this.expectedKey = expectedKey;
     this.compatibility = { protocol, simulation, content };

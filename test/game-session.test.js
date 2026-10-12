@@ -103,3 +103,20 @@ test('replaceable snapshots discard superseded compression and bound application
   const frames=peer.sent.map(v=>decodeBulkFrame(v.buffer));assert(frames.every(f=>f.id===frames[0].id));assert.deepEqual(inflateSync(Buffer.concat(frames.map(f=>f.data))),fresh);
  }finally{session.close();}
 });
+
+test('opt-in transient effects use an independent replaceable lane without superseding snapshots',async()=>{
+ const peer=new EventEmitter();peer.remote={capabilities:['snapshot-journal-v1','snapshot-transients-v1']};peer.sent=[];peer.send=()=>true;peer.sendBinary=()=>true;peer.sendStatePacket=frames=>{peer.sent.push(...frames.map(decodeBulkFrame));return true;};peer.close=()=>peer.emit('closed');
+ const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
+ try{
+  assert.equal(world.sent[0].transientSnapshots,true);
+  const snapshot=session.unorderedSnapshot({buffer:Buffer.from('current world'),sharedId:'world'});
+  world.emit('message',{type:'journalTransients',client:'player',buffer:Buffer.from('{"calls":[]}'),sharedId:'effects'});
+  await snapshot;
+  for(let n=0;n<100&&peer.sent.length<2;n++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.deepEqual(peer.sent.map(frame=>frame.magic).sort(),[0x32424642,0x34424642]);
+  assert.equal(session.queue.length,0);
+  peer.send=()=>false;peer.sendBinary=()=>false;session.enqueue({type:'important'});
+  await session.unorderedSnapshot({buffer:Buffer.from('expendable'),sharedId:'blocked-effect'},0x34424642,'transientVersion');
+  assert.equal(peer.sent.length,2);
+ }finally{session.close();}
+});

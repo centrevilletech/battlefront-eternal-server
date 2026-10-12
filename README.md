@@ -88,3 +88,11 @@ snapshots published to that authenticated peer; expired baselines bootstrap
 again. This path is under qualification and is not enabled by default. Local
 qualification can select it with `node scripts/load-peers.mjs --players=2
 --seconds=10 --journal=1`; these measurements exclude Internet TURN capacity.
+
+The additional opt-in `snapshot-transients-v1` capability moves stateless gunfire,
+impact sounds and brief animation flashes to deflated BFB4 frames on the unordered
+state channel. Effect handles and persistent animation transitions remain reliable.
+Expendable batches yield to reliable backlog, and each fragment group is admitted
+atomically. Clients without this capability keep the complete reliable event stream.
+Use `--journal=1 --transients=1` for local qualification; production clients do not
+enable this experimental mode by default.

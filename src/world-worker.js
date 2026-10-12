@@ -17,7 +17,8 @@ try {
   const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
-  let Journal;
+  let Journal,partitionSnapshotEvents;
+  try { ({partitionSnapshotEvents}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-transients.js')))); } catch {}
   try { ({SnapshotJournal:Journal}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-journal.js')))); } catch {}
   if(typeof Journal?.prototype.pin!=='function'||typeof Journal?.prototype.unpin!=='function')Journal=null;
   let journal,lastJournalId,eventSerial=0;
@@ -46,7 +47,14 @@ try {
         journal??=new Journal();
         if(lastJournalId!==group.sharedId) {
           const events=journal.push(group.buffer);lastJournalId=group.sharedId;
-          for(let offset=0;offset<events.calls.length;offset+=256){const batch={...events,id:++eventSerial,calls:events.calls.slice(offset,offset+256)};parentPort.postMessage({type:'journalEvents',sharedId:`events:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...batch})).buffer,recipients:journalRecipients.filter(r=>clients.get(r.client).snapshotAck?.epoch===journal.epoch)});}
+          const readyRecipients=journalRecipients.filter(r=>clients.get(r.client).snapshotAck?.epoch===journal.epoch);
+          for(let offset=0;offset<events.calls.length;offset+=256){
+            const batch={...events,id:++eventSerial,calls:events.calls.slice(offset,offset+256)};
+            const sendEvents=(type,value,recipients,kind)=>{if(!value.calls.length||!recipients.length)return;parentPort.postMessage({type,replaceKey:`${events.epoch}:${events.tick}`,sharedId:`${kind}:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...value})).buffer,recipients});};
+            const split=readyRecipients.filter(r=>clients.get(r.client).transientSnapshots);
+            sendEvents('journalEvents',batch,readyRecipients.filter(r=>!clients.get(r.client).transientSnapshots),'events');
+            if(split.length){const parts=partitionSnapshotEvents(batch);sendEvents('journalEvents',parts.reliable,split,'reliable-events');sendEvents('journalTransients',parts.transient,split,'transient-events');}
+          }
         }
         const encoded=new Map();
         for(const recipient of journalRecipients) {
@@ -89,8 +97,8 @@ try {
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,relativeSnapshots:m.relativeSnapshots===true,checkpoints:new Map(),inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
-        parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:'journal-v1'}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
+        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
+        parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
       else if(m.type==='snapshotAck') {
         const state=clients.get(m.client),pending=state?.pendingCheckpoint;
