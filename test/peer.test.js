@@ -6,6 +6,24 @@ import { join } from "node:path";
 import rtc from "node-datachannel";
 import { Peer } from "../src/peer.js";
 import { loadIdentity, keyId } from "../src/identity.js";
+import { EventEmitter } from "node:events";
+
+test('state envelopes require their own increasing transport sequence',()=>{
+ const peer=Object.assign(new EventEmitter(),{channels:new Map(),authenticated:true,lastSequence:0,capabilities:[]});
+ Object.setPrototypeOf(peer,Peer.prototype);
+ let receive;const channel={getLabel:()=> 'state',onError(){},onClosed(){},onOpen(){},onMessage:fn=>{receive=fn;},isOpen:()=>true};
+ Peer.prototype.channel.call(peer,channel);
+ const delivered=[];peer.on('message',(_,message)=>delivered.push(message));
+ const input={type:'inputs',commands:[{sequence:99,tick:200}]};
+ receive(JSON.stringify(input));
+ receive(JSON.stringify({...input,sequence:1}));
+ receive(JSON.stringify({...input,sequence:1}));
+ receive(JSON.stringify({...input,sequence:0}));
+ receive(JSON.stringify({...input,sequence:3}));
+ receive(JSON.stringify({...input,sequence:2}));
+ assert.deepEqual(delivered.map(message=>message.sequence),[1,3]);
+ assert.equal(delivered[0].commands[0].sequence,99);
+});
 test(
   "identity proof binds encrypted session; content mismatch is spectator",
   { timeout: 15000 },
