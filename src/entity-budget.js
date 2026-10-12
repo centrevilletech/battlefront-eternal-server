@@ -1,4 +1,4 @@
-// Experimental profile budget counts every offered application byte, including
+// Fixed profile budget counts every offered application byte, including
 // packets later dropped at native admission. It excludes SCTP/DTLS/IP overhead.
 export class EntityBudget {
   constructor({bytesPerSecond=26000,burstBytes=2200,now=performance.now()}={}) {

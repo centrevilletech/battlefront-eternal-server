@@ -1,3 +1,4 @@
+import { entityImportance } from './entity-importance.js';
 import { EntityBudget } from './entity-budget.js';
 import { EntityEdges } from './entity-edges.js';
 import { FreshStateWindow } from './fresh-state.js';
@@ -23,12 +24,13 @@ try {
   try {
     const capture=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-capture.js')));
     const registry=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-registry.js')));
+    const codec=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-codec.js')));
     const stream=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-stream.js')));
     const input=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-input.js')));
     const edges=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-edges.js')));
     const shots=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-shots.js')));
     const summary=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-summary.js')));
-    entityRuntime={...capture,...registry,...stream,...input,...edges,...shots,...summary};
+    entityRuntime={...capture,...registry,...codec,...stream,...input,...edges,...shots,...summary};
   } catch {}
   let entityRegistry,entityCapture,entityShots;
   try { ({partitionSnapshotEvents}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-transients.js')))); } catch {}
@@ -50,32 +52,39 @@ try {
     // invalidate another recipient's already-issued initial journal baseline.
     const publicationKeyframe=[...clients].some(([id,state])=>state.started&&(state.keyframe||world.players.get(id)?.keyframe));
     const groups=new Map();
-    let semanticRecords;
+    let semanticRecords,commonSummaries;
     for (const [client, state] of clients) if (state.started) {
       if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
         const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
         if(state.entityReady){
           try {
-            semanticRecords??=entityCapture.capture(game.worldClock.tick);
+            semanticRecords??=entityCapture.capture(game.worldClock.tick).map(entityRuntime.prepareEntityRecord);
+            commonSummaries??=entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1}).map(entityRuntime.prepareEntityRecord);
             if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
-            const actor=world.players.get(client),position=actor.unit?.position;
-            for(const record of semanticRecords){
-              if(!actor.spectator&&record.kind==='soldier'&&record.id===actor.unit?.id)continue;
-              const distance=record.position&&position?Math.hypot(record.position[0]-position.x,record.position[1]-position.y,record.position[2]-position.z):Infinity;
-              state.entity.update(record,record.kind==='seat'||record.kind==='tombstone'?8:distance<40?8:distance<100?3:1);
+            const actor=world.players.get(client),vehicle=actor.unit?.seat?.vehicle,soldier=actor.unit?.soldier;
+            const position=(vehicle?.position||actor.unit?.position)?.toArray(),velocity=(vehicle?.velocity||soldier?.velocity)?.toArray();
+            let forward;
+            if(vehicle?.quaternion){const {x,y,z,w}=vehicle.quaternion;forward=[2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)];}
+            else if(soldier){const yaw=soldier.aimYaw,pitch=soldier.aimPitch,c=Math.cos(pitch);forward=[Math.sin(yaw)*c,Math.sin(pitch),Math.cos(yaw)*c];}
+            const interest={position,velocity,forward,flying:!!vehicle?.flying};
+            for(const prepared of semanticRecords){
+              const record=prepared.record;if(!actor.spectator&&record.kind==='soldier'&&record.id===actor.unit?.id)continue;
+              state.entity.update(prepared,entityImportance(record,interest));
             }
-            for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client}))state.entity.update(record,4);
+            for(const prepared of commonSummaries)state.entity.update(prepared,4);
+            for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false}))state.entity.update(record,4);
             const own=actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
             const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
             const offer=(packet,ownCorrection)=>{
+              if(!packet)return false;
               if(!state.entityBudget.take(packet.buffer.byteLength,begun)){state.entityMetrics.budgetDropped++;return false;}
               state.entityMetrics[ownCorrection?'ownOffered':'remoteOffered']++;
               const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
               parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs,buffer},[buffer]);return true;
             };
             const packet=state.entity.packet({...fields,own});
-            if(offer(packet,!!own)&&state.entityBudget.available(begun)>=1100)offer(state.entity.packet({...fields,excludePacketIds:[packet.packetId]}),false);
+            if(offer(packet,!!own)){const maxBytes=Math.min(1100,state.entityBudget.available(begun));if(maxBytes>30)offer(state.entity.packet({...fields,maxBytes,excludePacketIds:[packet.packetId]}),false);}
           } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
           continue;
         }

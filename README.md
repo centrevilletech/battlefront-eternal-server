@@ -95,7 +95,10 @@ fired or hit anything. Independent input ACKs never imply discarded input execut
 
 The fixed scheduler reserves nominal 20 Hz own correction and bounds offered
 state payload to 26,000 bytes/second with a 2,200-byte burst. Remaining credit
-admits remote-only messages, prioritizing nearby actors. Native admission age is
+admits remote-only messages sized to the remaining credit. Authoritative distance,
+closing speed, aim direction and a vehicle priority floor determine importance.
+Common actor and battle/post records are prepared once per publication and shared
+across recipient schedulers. Native admission age is
 separate from actual delivery age; control traffic and network overhead are
 outside this state budget.
 
