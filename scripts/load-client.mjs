@@ -11,7 +11,7 @@ const later=(fn,ms)=>{const t=setTimeout(()=>{timers.delete(t);fn();},ms);timers
 process.on('message',async m=>{
  try {
  if(m.type==='create'){
- settings=m;if(m.sackMs>=0&&!peers.size)(await import('node-datachannel')).default.setSctpSettings({delayedSackTime:m.sackMs});const {BinaryReader}=await import(pathToFileURL(join(m.root,'src/runtime/packet.js')));const {expandMetadata}=await import(pathToFileURL(join(m.root,'src/runtime/shared-packet.js')));
+ settings=m;if(!peers.size&&(m.sackMs>=0||m.sctpBuffer>0))(await import('node-datachannel')).default.setSctpSettings({...(m.sackMs>=0?{delayedSackTime:m.sackMs}:{}),...(m.sctpBuffer>0?{sendBufferSize:m.sctpBuffer}:{})});const {BinaryReader}=await import(pathToFileURL(join(m.root,'src/runtime/packet.js')));const {expandMetadata}=await import(pathToFileURL(join(m.root,'src/runtime/shared-packet.js')));
  const peer=new Peer({name:'load-client-'+m.index,keys:loadIdentity(join(m.directory,'client-'+m.index)),initiator:true,simulation:'bfe-sim-2',content:m.content,capabilities:[...(m.compact?['compact-personal-v1']:[]),...(m.binary?['binary-bulk-v1']:[]),'input-state-v1',...(m.journal?['snapshot-journal-v1']:[]),...(m.relative?['snapshot-relative-v1']:[]),...(m.linear?['linear-projectiles-v1']:[])],portable:m.portable,stateLifeMs:m.stateLifeMs,stateBufferLimit:m.stateBufferLimit});
  const {SnapshotReceiver}=await import(pathToFileURL(join(m.root,'src/runtime/snapshot-journal.js')));
  const c={journal:new SnapshotReceiver(),peer,index:m.index,reader:new BinaryReader(),parts:new Map(),packets:0,tick:0,ack:0,sequence:0,fireId:0,held:false,inputWire:0,actionsPending:new Map(),invalidatedActions:0,actionLatency:[],rtt:[],ackLag:[],packetGaps:[],lastPacket:0};peers.set(m.index,c);
