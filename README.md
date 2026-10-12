@@ -100,3 +100,5 @@ Expendable batches yield to reliable backlog, and each fragment group is admitte
 atomically. Clients without this capability keep the complete reliable event stream.
 Use `--journal=1 --transients=1` for local qualification; production clients do not
 enable this experimental mode by default.
+
+For isolated transport experiments, `BFE_EXPERIMENTAL_SCTP_SEND_BUFFER` sets the native SCTP send buffer (32768–1048576 bytes), `BFE_EXPERIMENTAL_STATE_BUFFER` sets the application state-channel admission threshold (1024–65536 bytes), and `BFE_EXPERIMENTAL_JOURNAL_FRAME` sets the journal fragment target (512–20000 bytes). Unset variables preserve existing defaults. These controls do not enable journal mode or change negotiated client reliability; they are diagnostic settings, not qualified production recommendations.

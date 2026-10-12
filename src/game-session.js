@@ -1,5 +1,6 @@
 import {encodeBulkFrame,JOURNAL_MAGIC,EVENTS_MAGIC,TRANSIENTS_MAGIC} from './bulk-frame.js';
 import { deflate } from 'node:zlib';
+import { transportTuning } from './transport-tuning.js';
 const sharedCompression = new WeakMap();
 export const compressionStats = { calls:0, durations:[] };
 function compress(world, buffer, sharedId) {
@@ -18,7 +19,7 @@ function compress(world, buffer, sharedId) {
 // existing engine delta chain; inputs use the unordered state channel.
 export class GameSession {
   constructor(peer, world, id, welcome, options={}) {
-    this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??20000));
+    this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??transportTuning.journalFrameBytes));
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;this.binary=Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('binary-bulk-v1')&&typeof peer.sendBinary==='function';
     this.journal=peer.remote?.capabilities?.includes('snapshot-journal-v1')&&typeof peer.sendBinary==='function';
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,transientGroups:0,transientBytes:0,transientDropped:0,reliableBytes:0};

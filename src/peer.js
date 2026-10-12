@@ -4,6 +4,7 @@ import { PortablePeerConnection } from "./portable-rtc.js";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { proof, verifyProof, keyId } from "./identity.js";
+import { transportTuning, configureNativeTransport } from './transport-tuning.js';
 export class Peer extends EventEmitter {
   constructor({
     name,
@@ -20,7 +21,7 @@ export class Peer extends EventEmitter {
     content,
     capabilities = [],
     iceUdpMuxPort = 0,
-    stateLifeMs = 0, stateBufferLimit = 65536,
+    stateLifeMs = 0, stateBufferLimit = transportTuning.stateBufferLimit,
     portable = process.env.BFE_PORTABLE_RTC === "1" || iceServers.some(
       (s) => s.relayType === "TurnTcp" || s.relayType === "TurnTls",
     ),
@@ -40,7 +41,9 @@ export class Peer extends EventEmitter {
     this.lastSequence = 0;
     this.nonce = randomBytes(32).toString("hex");
     this.lastTraffic = Date.now();
-    const Connection = portable ? PortablePeerConnection : require("node-datachannel").PeerConnection;
+    const native = portable ? null : require("node-datachannel");
+    if (native) configureNativeTransport(native);
+    const Connection = portable ? PortablePeerConnection : native.PeerConnection;
     this.pc = new Connection(name, {
       iceServers,
       ...(iceUdpMuxPort && !portable ? {enableIceUdpMux:true,portRangeBegin:iceUdpMuxPort,portRangeEnd:iceUdpMuxPort}:{}),
