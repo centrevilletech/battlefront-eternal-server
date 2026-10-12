@@ -1,3 +1,4 @@
+import { CONTRACT } from './contract-fixture.js';
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -44,14 +45,14 @@ test(
         keys: ka,
         initiator: true,
         expectedKey: keyId(kb.publicKey),
-        simulation: "test",
+        contract: {...CONTRACT,simulation:"bfe-sim-123"},
         content: "one",
       }),
       b = new Peer({
         name: "b",
         portable: true,
         keys: kb,
-        simulation: "test",
+        contract: {...CONTRACT,simulation:"bfe-sim-123"},
         content: "two",
       });
     t.after(async () => {

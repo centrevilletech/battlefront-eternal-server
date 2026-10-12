@@ -2,6 +2,7 @@
 import {startParentDiagnostics,parentCount} from './parent-diagnostics.js';
 import {returnProcessingCredit} from './processing-credit.js';
 import {PublicationCoordinator} from './publication-coordinator.js';
+import { validateNetworkContract } from './network-contract.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
@@ -168,6 +169,7 @@ async function serve() {
         tick,
         error,
         multiplayerReady: status === "running" && Boolean(local),
+        networkContract: world?.networkContract ?? null,
       }),
     );
   });
@@ -204,6 +206,8 @@ async function serve() {
       else if(returnProcessingCredit(matchWorld,m)){}
       else if(m.type==='publicationFatal'){status='fault';error=m.message;await online?.close();await local?.close();await matchWorld.terminate();}
       else if (m.type === "ready") {
+        try { matchWorld.networkContract = validateNetworkContract(m.networkContract); }
+        catch (e) { status="fault";error=e.message;await matchWorld.terminate();return; }
         if(process.env.BFE_PUBLICATION_WORKER==='1'){
           const {encodeEntityPacket}=await import(pathToFileURL(resolve(config.engine,'src/runtime/network-entity-codec.js')));
           publication=matchWorld.publication=new PublicationCoordinator({engine:config.engine,encodeOwn:fields=>encodeEntityPacket(fields,1100),maxClients:(config.maxPlayers??64)*3,send:(message)=>{if(message.type==='publicationBatchDone')queueMicrotask(()=>publication.processed(message));else matchWorld.emit('message',message);},report:message=>console.error('Publication worker:',message),fatal:message=>matchWorld.emit('message',{type:'publicationFatal',message})});

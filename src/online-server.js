@@ -1,3 +1,4 @@
+import { validateNetworkContract, wireCompatibility } from './network-contract.js';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { loadIdentity, keyId } from './identity.js';
@@ -8,17 +9,17 @@ import { BanCache } from './bans.js';
 import { GameSession } from './game-session.js';
 export class OnlineServer extends EventEmitter {
   constructor({ config, directory, world, query, isBanned = () => false }) {
-    super(); this.isBanned=isBanned; this.config = config; this.world = world; this.query = query; this.peers = new Map(); this.pending = new Map();
+    super(); this.contract=validateNetworkContract(world.networkContract);this.wire=wireCompatibility(this.contract); this.isBanned=isBanned; this.config = config; this.world = world; this.query = query; this.peers = new Map(); this.pending = new Map();
     this.keys = loadIdentity(join(directory, 'identity.json')); this.id = keyId(this.keys.publicKey);
     this.certificate = loadCertificate(directory);
     this.master = new MasterClient({ url: config.master, keys: this.keys, noticeAccepted: config.onlineNoticeAccepted });
     this.bans = new BanCache(this.master, join(directory, 'master-ban-key'));
-    this.simulation = 'bfe-sim-5'; this.content = config.content ?? 'bfe-content-1';
+    this.simulation = this.contract.simulation; this.content = config.content ?? 'bfe-content-1';
     this.master.on('signal', m => this.signal(m).catch(e => this.emit('fault', e.message)));
     this.master.on('disconnected', () => { if (!this.closed) this.reconnect(); });
   }
   listing() {
-    return { name: this.config.name, protocol: 2, profile: 'entity-state-v1', simulation: this.simulation, content: this.content,
+    return { name: this.config.name, ...this.wire, content: this.content,
       rotation: this.config.rotation, players: [...this.peers.values()].filter(p => p.authenticated).length,
       maxPlayers: this.config.maxPlayers ?? 64, relayPolicy: this.config.relayPolicy,
       endpoints: [], fingerprint: this.certificate.fingerprint };
@@ -56,14 +57,14 @@ export class OnlineServer extends EventEmitter {
       // A native host uses UDP to its relay; clients may independently use TCP/TLS.
       if (!portable) iceServers = iceServers.filter(server => !server.relayType || server.relayType === 'TurnUdp');
       peer = new Peer({ name: m.from, keys: this.keys, expectedKey: m.from,
-        simulation: this.simulation, content: this.content, iceServers,
+        contract: this.contract, content: this.content, iceServers,
         relay: this.config.relayPolicy === 'always', portable, ...this.certificate });
       this.peers.set(m.from, peer);
       peer.on('signal', s => this.master.signal(m.from, s));
       peer.once('closed', reason => {this.peers.delete(m.from);if(reason && reason!=='closed')console.warn('Online peer disconnected:',reason);});
       peer.on('fault', error => this.emit('fault', error));
       peer.once('ready', () => { if(this.isBanned(m.from)){peer.close();return;} new GameSession(peer, this.world, m.from, {
-        query: this.query, protocol: 2, profile: 'entity-state-v1', simulation: this.simulation, content: this.content, serverId: this.id,
+        query: this.query, ...this.wire, content: this.content, serverId: this.id,
       }); });
       peer.signal(signal);
       for (const candidate of this.pending.get(m.from) ?? []) peer.signal(candidate);

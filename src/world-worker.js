@@ -1,6 +1,7 @@
 import {acknowledgeEntityPackets} from './entity-receipts.js';
 import {LatestBatch} from './latest-batch.js';
 import {PublicationBridge,acceptsPublicationCommand} from './publication-bridge.js';
+import { loadNetworkContract } from './network-contract.js';
 import { liveActorRoster } from './actor-roster.js';
 import { EntityEventStore } from './entity-event-store.js';
 import { entityImportance } from './entity-importance.js';
@@ -17,6 +18,7 @@ import { dataReader } from './content.js';
 globalThis.fetch = await dataReader(workerData.data);
 try {
   const root = resolve(workerData.engine);
+  const networkContract = await loadNetworkContract(root);
   const { createGame } = await import(pathToFileURL(resolve(root, 'src/game.js')));
   const { createMultiplayerWorld } = await import(pathToFileURL(resolve(root, 'src/runtime/multiplayer-world.js')));
   const { worldState } = await import(pathToFileURL(resolve(root, 'src/runtime/world-state.js')));
@@ -37,7 +39,7 @@ try {
     const combat=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-combat.js')));
     const summary=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-summary.js')));
     const player=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-player.js')));
-    if(player.OWN_PLAYER_SCHEMA!==8)throw Error('bfe-sim-5 requires own-player correction schema 8');
+    if(player.OWN_PLAYER_SCHEMA!==networkContract.ownCorrectionSchema)throw Error(`Engine contract requires own-player correction schema ${networkContract.ownCorrectionSchema}`);
     entityRuntime={...capture,...registry,...codec,...stream,...input,...edges,...shots,...summary,...combat};
   } catch(error) { throw new Error('Mandatory multiplayer engine runtime unavailable: '+error.message,{cause:error}); }
   let entityRegistry,entityCapture,entityShots,combatCapture,combatDispose;
@@ -199,7 +201,7 @@ try {
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); sendParent({ type: 'finished', tick }); }
   };
-  sendParent({ type: 'ready', generation: game.playerUnit.generation, content });
+  sendParent({ type: 'ready', generation: game.playerUnit.generation, content, networkContract });
   parentPort.on('message', async m => {
     try {
       if(publication&&m.client&&!acceptsPublicationCommand(clients,m))return;

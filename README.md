@@ -75,16 +75,29 @@ Local capacity testing uses `node --max-old-space-size=6144 scripts/load-peers.m
 
 Dedicated hosts default to native RTC and use UDP when allocating their own TURN relay. Remote clients can still reach that allocation through their own TCP or TLS relay connection. `BFE_PORTABLE_RTC=1` or configuration `portableRTC: true` selects the portable backend for desktop packaging or hosts requiring TCP/TLS-only egress. `node scripts/relay-smoke.mjs --mixed` checks native-host interoperability with portable TCP/TLS clients using the configured public connectivity infrastructure.
 
-All online, LAN and desktop HOST sessions require protocol 2, simulation
-`bfe-sim-5`, and profile `entity-state-v1`. Older clients receive an update-required
-version error. There is no capability negotiation or legacy gameplay fallback.
+All online, LAN and desktop HOST sessions require the one contract exported by
+`src/runtime/network-contract.js` in the mounted engine. The current staged
+engine uses protocol 2, `bfe-sim-5`, profile `entity-state-v1`, and correction schema
+8. Before gameplay readiness, the server validates manifest version 1 and adapter
+ABI 1 and checks the runtime correction export against the manifest. Missing or
+incompatible manifests fail startup. Discovery, signaling, identity proofs and
+sessions all use that validated contract; the server has no fallback simulation
+string. Older clients receive an update-required version error. There is no
+capability negotiation or legacy gameplay fallback.
+
+Adapter ABI 1 fixes the server-owned BNI1/BNE1 envelope magic, 1100-byte limit,
+30-byte state header and tick offset 12, epoch/input/edge semantics, and worker API
+shapes. Engine-owned record bodies may evolve with a new mandatory simulation
+revision while these interfaces remain unchanged. Changing the adapter ABI needs
+a matched server or atomic pair deployment. Stage this manifest on the existing
+simulation-five engine before deploying a server that requires it.
 The identity proof uses the `BFE/2` transcript and the same signed peer identities.
 
 One reliable registry/initial-world bootstrap establishes the scene. Ongoing
 state consists of independent absolute entity messages of at most 1100 bytes on
 an unordered channel with a fixed 50 ms lifetime. Each native admission receipt
 authorizes only that packet's membership ACK. Missing actors are unchanged;
-lifecycle removal requires a tombstone. Own correction schema 5 includes consumed
+lifecycle removal requires a tombstone. The current own correction includes consumed
 and discarded input watermarks, authoritative held controls and view context.
 
 Compact BNI1 input carries held state, cumulative look and independent numbered
@@ -102,8 +115,8 @@ across recipient schedulers. Native admission age is
 separate from actual delivery age; control traffic and network overhead are
 outside this state budget.
 
-This mandatory protocol still has implementation gaps: ground-driver, turret and
-walker correction are unsupported, and complete effects/gameplay parity and
+Ground-driver correction exists, but full mounted gameplay, stationary turrets,
+walkers, special units, complete effects/gameplay parity and
 64-player latency, coverage and bandwidth qualification remain outstanding.
 Historical load scripts and transport reports describe retired protocols; use
 the private engine's current Chromium/netem harness for matched protocol-2 tests.

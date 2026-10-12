@@ -1,4 +1,5 @@
 import {parentDiagnosticsEnabled,parentDuration} from './parent-diagnostics.js';
+import { validateNetworkContract, wireCompatibility } from './network-contract.js';
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 import { PortablePeerConnection } from "./portable-rtc.js";
@@ -18,6 +19,7 @@ export class Peer extends EventEmitter {
     ipFamily = 0,
     expectedKey,
     content,
+    contract,
     iceUdpMuxPort = 0,
     stateBufferLimit = transportTuning.stateBufferLimit,
     portable = process.env.BFE_PORTABLE_RTC === "1" || iceServers.some(
@@ -25,11 +27,12 @@ export class Peer extends EventEmitter {
     ),
   }) {
     super();
+    this.contract=validateNetworkContract(contract);
     this.keys = keys;this.stateBufferLimit=stateBufferLimit;
 
     this.initiator = initiator;
     this.expectedKey = expectedKey;
-    this.compatibility = { protocol:2, simulation:"bfe-sim-5", profile:"entity-state-v1", content };
+    this.compatibility = { ...wireCompatibility(this.contract), content };
     this.channels = new Map();
     this.pendingCandidates = [];
     this.hasRemoteDescription = false;
@@ -183,7 +186,7 @@ export class Peer extends EventEmitter {
         m.profile !== this.compatibility.profile ||
         m.simulation !== this.compatibility.simulation
       )
-        {this.channels.get("events").sendMessage(JSON.stringify({type:"version-error",message:"Update required: protocol 2 / bfe-sim-5 / entity-state-v1"}));throw Error("Update required: incompatible protocol version");}
+        {this.channels.get("events").sendMessage(JSON.stringify({type:"version-error",message:`Update required: protocol ${this.compatibility.protocol} / ${this.compatibility.simulation} / ${this.compatibility.profile}`}));throw Error("Update required: incompatible protocol version");}
       if (this.expectedKey && keyId(m.publicKey) !== this.expectedKey)
         throw Error("unexpected identity");
       this.remote = m;

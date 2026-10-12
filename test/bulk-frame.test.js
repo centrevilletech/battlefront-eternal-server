@@ -1,3 +1,4 @@
+import { CONTRACT } from './contract-fixture.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
@@ -19,7 +20,7 @@ test('binary bulk rejects malformed lengths, duplicate metadata positions, and e
 test('authenticated native and portable peers exchange raw binary bulk in both directions',{timeout:15000},async()=>{
  const dir=await mkdtemp(join(tmpdir(),'bfe-binary-'));let a,b;
  try{
-  const options={simulation:'test',content:'test',capabilities:['binary-bulk-v1','snapshot-journal-v1']};
+  const options={contract:CONTRACT,content:'test'};
   a=new Peer({...options,name:'portable',portable:true,initiator:true,keys:loadIdentity(join(dir,'a'))});
   b=new Peer({...options,name:'native',portable:false,keys:loadIdentity(join(dir,'b'))});
   a.on('signal',value=>b.signal(value));b.on('signal',value=>a.signal(value));
