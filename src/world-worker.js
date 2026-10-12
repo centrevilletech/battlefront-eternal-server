@@ -32,8 +32,10 @@ try {
     const shots=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-shots.js')));
     const combat=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-combat.js')));
     const summary=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-summary.js')));
+    const player=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-player.js')));
+    if(player.OWN_PLAYER_SCHEMA!==8)throw Error('bfe-sim-4 requires own-player correction schema 8');
     entityRuntime={...capture,...registry,...codec,...stream,...input,...edges,...shots,...summary,...combat};
-  } catch {}
+  } catch(error) { throw new Error('Mandatory multiplayer engine runtime unavailable: '+error.message,{cause:error}); }
   let entityRegistry,entityCapture,entityShots,combatCapture,combatDispose;
   const combatStore=new EntityEventStore();
   try { ({partitionSnapshotEvents}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-transients.js')))); } catch {}
