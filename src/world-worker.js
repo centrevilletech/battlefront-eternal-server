@@ -1,3 +1,4 @@
+import { EntityEdges } from './entity-edges.js';
 import { FreshStateWindow } from './fresh-state.js';
 import { updateRoomCapabilities } from './room-capabilities.js';
 import { Session } from 'node:inspector';
@@ -18,7 +19,17 @@ try {
   const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
-  let Journal,SnapshotMemoryLimit,partitionSnapshotEvents;
+  let Journal,SnapshotMemoryLimit,partitionSnapshotEvents,entityRuntime;
+  try {
+    const capture=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-capture.js')));
+    const registry=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-registry.js')));
+    const stream=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-stream.js')));
+    const input=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-input.js')));
+    const edges=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-edges.js')));
+    const shots=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-shots.js')));
+    entityRuntime={...capture,...registry,...stream,...input,...edges,...shots};
+  } catch {}
+  let entityRegistry,entityCapture,entityShots;
   try { ({partitionSnapshotEvents}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-transients.js')))); } catch {}
   try { ({SnapshotJournal:Journal,SnapshotMemoryLimit}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-journal.js')))); } catch {}
   if(typeof Journal?.prototype.pin!=='function'||typeof Journal?.prototype.unpin!=='function')Journal=null;
@@ -38,8 +49,25 @@ try {
     // invalidate another recipient's already-issued initial journal baseline.
     const publicationKeyframe=[...clients].some(([id,state])=>state.started&&(state.keyframe||world.players.get(id)?.keyframe));
     const groups=new Map();
+    let semanticRecords;
     for (const [client, state] of clients) if (state.started) {
       if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,ackActions:actor.actions?.ack??0});}
+      if(state.entity){
+        parentPort.postMessage({type:'entityEdgeResults',client,...state.entityEdges.feedback()});
+        if(state.entityReady){
+          try {
+            semanticRecords??=entityCapture.capture(game.worldClock.tick);
+            if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
+            for(const record of semanticRecords)state.entity.update(record,record.kind==='seat'||record.kind==='tombstone'?4:1);
+            const actor=world.players.get(client),own=entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
+            const packet=state.entity.packet({tick:game.worldClock.tick,own,ackInput:actor.mailbox.ack,ackActions:actor.actions?.ack??0,ackFire:actor.fire?.received??0});
+            const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
+            parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,buffer},[buffer]);
+          } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
+          continue;
+        }
+        if(state.fresh.joinIssued)continue;
+      }
       const keyframe=Boolean(publicationKeyframe||state.keyframe), packet=world.snapshot(client,{keyframe,sharedPacket:true});
       state.keyframe=false;if(!packet)continue;
       if(packet instanceof ArrayBuffer){parentPort.postMessage({type:'packet',client,buffer:packet,keyframe},[packet]);continue;}
@@ -54,7 +82,7 @@ try {
         journal??=new Journal({maxBytes:64*1024*1024});
         if(lastJournalId!==group.sharedId) {
           const events=journal.push(group.buffer);lastJournalId=group.sharedId;
-          const readyRecipients=journalRecipients.filter(r=>clients.get(r.client).snapshotAck?.epoch===journal.epoch);
+          const readyRecipients=journalRecipients.filter(r=>!clients.get(r.client).entity&&clients.get(r.client).snapshotAck?.epoch===journal.epoch);
           for(let offset=0;offset<events.calls.length;offset+=256){
             const batch={...events,id:++eventSerial,calls:events.calls.slice(offset,offset+256)};
             const sendEvents=(type,value,recipients,kind)=>{if(!value.calls.length||!recipients.length)return;parentPort.postMessage({type,replaceKey:`${events.epoch}:${events.tick}`,sharedId:`${kind}:${events.epoch}:${batch.id}`,buffer:new TextEncoder().encode(JSON.stringify({type:'snapshot-events',...value})).buffer,recipients});};
@@ -110,7 +138,13 @@ try {
   const report = () => parentPort.postMessage({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].filter(p=>!p.spectator).map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
   let ended = false;
   const step = () => {
-    const begun=performance.now(), tick = world.step(); measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    const begun=performance.now();
+    for(const [client,state]of clients)if(state.entityEdges&&state.started){
+      const actor=world.players.get(client);if(actor.unit.generation!==state.entityEdges.generation)state.entityEdges.reset(1,actor.unit.generation);
+      state.entityEdges.advance(game.worldClock.tick+1);
+    }
+    const tick=world.step();
+    for(const state of clients.values())state.entityEdges?.consumed(); measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
@@ -121,15 +155,38 @@ try {
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
         if (clients.has(m.client)) throw Error('already joined');
+        if(m.entity&&!entityRuntime)throw Error('semantic entity runtime unavailable');
+        if(m.entity&&m.spectator)throw Error('semantic spectator mode not implemented');
         if(m.fresh && (!Journal || typeof SnapshotMemoryLimit!=='function'))throw Error('fresh state requires the bounded journal runtime');
+        if(m.entity&&!entityRegistry){
+          entityRegistry=entityRuntime.createEntityRegistry(game.data,{contentEpoch:1,inputCodes:entityRuntime.INPUT_CODES,bindingProfiles:entityRuntime.DEFAULT_BINDING_PROFILES});
+          entityShots=new entityRuntime.EntityShotCounters(game.simEvents);
+          entityCapture=new entityRuntime.EntityWorldCapture(game,entityRegistry,{fireCounter:unit=>entityShots.counter(unit)});
+        }
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
-        clients.set(m.client, { started: false, compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
-        parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
+        clients.set(m.client, { started: false, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
+        if(m.entity)clients.get(m.client).entityEdges=new EntityEdges({Receiver:entityRuntime.EntityEdgeReceiver,actor:world.players.get(m.client),world,client:m.client,registry:entityRegistry});
+        if(m.entity)parentPort.postMessage({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
+        parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:m.entity?'entity-v1':clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
       } else if (m.type === 'leave') { report(); journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
+      else if(m.type==='entityInput'){
+        const state=clients.get(m.client);if(!state?.entity||!state.started)return;
+        const packet=entityRuntime.decodeEntityInput(new Uint8Array(m.buffer),entityRegistry);
+        if(packet.epoch!==1||packet.generation!==world.players.get(m.client)?.unit?.generation)return;
+        state.entityEdges.receive(packet,game.worldClock.tick);
+        for(const command of packet.commands){
+          const accepted=world.input(m.client,command),stats=state.inputDiagnostics;
+          stats[accepted?'accepted':'rejected']++;stats.last={sequence:command.sequence,tick:command.tick,generation:command.generation,epoch:command.epoch,serverTick:game.worldClock.tick,accepted,lookTotal:command.lookTotal,down:command.down.slice(0,32)};
+        }
+        for(const packetId of packet.receipts)state.entity.ack({epoch:packet.epoch,packetId});
+      }
+      else if(m.type==='entityEdgeAck'){clients.get(m.client)?.entityEdges?.acknowledge(m);}
+      else if(m.type==='entitySent'){const state=clients.get(m.client);if(m.epoch===1)state?.entity?.admitted(m.packetId);}
+      else if(m.type==='entityAck'){clients.get(m.client)?.entity?.ack({epoch:m.epoch,packetId:m.packetId});}
       else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick,m.initialBootstrap===true);}
       else if(m.type==='snapshotAck') {
         const state=clients.get(m.client),pending=state?.pendingCheckpoint;
-        if(state?.fresh){if(state.fresh.acknowledge(m.epoch,m.tick,tick=>journal?.epoch===m.epoch&&journal.pin(m.client+':ack',tick))){state.snapshotAck=state.fresh.ack;journal.unpin(m.client+':join');}return;}
+        if(state?.fresh){if(state.fresh.acknowledge(m.epoch,m.tick,tick=>journal?.epoch===m.epoch&&journal.pin(m.client+':ack',tick))){state.snapshotAck=state.fresh.ack;journal.unpin(m.client+':join');if(state.entity){state.entityReady=true;journal.unpin(m.client+':ack');}}return;}
         if(state?.journal&&pending?.epoch===m.epoch&&pending?.tick===m.tick&&journal?.epoch===m.epoch&&journal.snapshots.has(m.tick)){
           if(!journal.pin(m.client+':ack',m.tick))return;journal.unpin(m.client+':pending');state.pendingCheckpoint=null;state.snapshotAck={epoch:m.epoch,tick:m.tick};
         }

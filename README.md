@@ -138,3 +138,22 @@ world fragment groups and presentation calls. It does not satisfy the final
 per-entity, datagram-sized protocol or qualify 64-player performance. It will be
 retired with the legacy transport when the semantic entity successor passes the
 same acceptance gates; experimental modes are not permanent product choices.
+
+The harness-only `entity-state-v1` profile is the semantic replacement under
+construction. It has one reliable registry/initial-world bootstrap, then absolute
+entity messages of at most 1100 bytes on unordered state. Each native admission
+receipt authorizes only that packet's membership ACK. Missing actors in a message
+are unchanged; lifecycle removal requires a tombstone. Compact BNI1 input carries
+held state, cumulative look, and independent numbered edges. Durable edge receipt
+only stops retransmission; explicit consumed/expired/cancelled results retire
+prediction, and those results repeat until acknowledged. Consumption means the
+simulation received the control, not that a weapon fired or hit anything.
+
+This is an infantry/flyer integration prototype, not complete multiplayer parity.
+Ground-driver, turret and walker correction are unsupported; remote unsupported
+actors produce bounded diagnostics. World objectives, effects and other gameplay
+coverage remain in progress. The initial smoke uses 20 Hz own correction with
+remaining packet space for actors; that cadence has not qualified 64-player
+coverage or bandwidth. Legacy JSON input is temporarily accepted solely to stage
+client integration and will be removed from this profile when the compact sender
+is verified. No experimental profile is enabled for ordinary clients.

@@ -21,7 +21,8 @@ export class GameSession {
   constructor(peer, world, id, welcome, options={}) {
     this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??transportTuning.journalFrameBytes));
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;this.binary=Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('binary-bulk-v1')&&typeof peer.sendBinary==='function';
-    this.fresh=peer.remote?.capabilities?.includes('fresh-state-v1')&&typeof peer.sendBinary==='function';
+    this.entity=peer.remote?.capabilities?.includes('entity-state-v1')&&typeof peer.sendBinary==='function';
+    this.fresh=(this.entity||peer.remote?.capabilities?.includes('fresh-state-v1'))&&typeof peer.sendBinary==='function';
     if(this.fresh)this.binary=true;
     this.journal=(this.fresh||peer.remote?.capabilities?.includes('snapshot-journal-v1'))&&typeof peer.sendBinary==='function';
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,transientGroups:0,transientBytes:0,transientDropped:0,reliableBytes:0};
@@ -30,6 +31,10 @@ export class GameSession {
       if (m.client !== id && !recipient) return;
       if(recipient)m={...m,...recipient};
       if(m.type==='snapshotFault')peer.close(m.reason);
+      else if(m.type==='entityDiagnostics')peer.send('events',{type:'entity-diagnostics',actors:m.actors});
+      else if(m.type==='entityEdgeResults')peer.send('state',{...m,type:'entity-edge-results'});
+      else if(m.type==='entityRegistry')peer.send('events',{type:'entity-registry',registry:m.registry});
+      else if(m.type==='entityPacket')this.entityPacket(m);
       else if(m.type==='journalTransients')this.unorderedSnapshot(m,TRANSIENTS_MAGIC,'transientVersion');
       else if(m.type==='journalEvents')this.packet(m.buffer,undefined,m.sharedId,EVENTS_MAGIC);
       else if(m.type==='journalPacket'){if(m.reliable&&(!this.fresh||m.initialBootstrap&&!this.joinBootstrapQueued)){if(this.fresh)this.joinBootstrapQueued=true;this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC,this.fresh?{epoch:m.snapshotEpoch,tick:m.snapshotTick,initialBootstrap:true}:undefined);}else if(!m.initialBootstrap)this.unorderedSnapshot(m);}
@@ -47,13 +52,26 @@ export class GameSession {
     world.setMaxListeners(Math.max(world.getMaxListeners(),256));
     world.on('message', this.listener);
     peer.on('message', (label, m) => this.message(label, m));
+    peer.on('binary',(buffer,label)=>{
+      if(!this.entity||label!=='state'||this.closed)return;
+      const bytes=Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
+      const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;}if(++this.entityInputCount>120)return peer.close('entity-input-flood');
+      this.world.postMessage({type:'entityInput',client:this.id,buffer:bytes});
+    });
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, journal:this.journal,fresh:this.fresh,transientSnapshots:!this.fresh&&this.journal&&peer.remote?.capabilities?.includes('snapshot-transients-v1')===true,relativeSnapshots:!this.fresh&&peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, entity:this.entity, journal:this.journal,fresh:this.fresh,transientSnapshots:!this.fresh&&this.journal&&peer.remote?.capabilities?.includes('snapshot-transients-v1')===true,relativeSnapshots:!this.fresh&&peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
     if(this.closed)return;
-    if(m.type==='snapshot-ack'){
+    if(m.type==='entity-edge-ack'){
+      if(!this.entity||label!=='state'||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.ids)||m.ids.length>32||m.ids.some(id=>!Number.isSafeInteger(id)||id<1))return;
+      this.world.postMessage({type:'entityEdgeAck',client:this.id,epoch:m.epoch,generation:m.generation,ids:m.ids});
+    }else if(m.type==='entity-ack'){
+      if(!this.entity||label!=='state'||!Number.isSafeInteger(m.epoch)||m.epoch<1||!Number.isSafeInteger(m.packetId)||m.packetId<1)return;
+      const now=Date.now();if(now-(this.entityAckWindow??0)>=1000){this.entityAckWindow=now;this.entityAckCount=0;}if(++this.entityAckCount>120)return this.peer.close('entity-ack-flood');
+      this.world.postMessage({type:'entityAck',client:this.id,epoch:m.epoch,packetId:m.packetId});
+    }else if(m.type==='snapshot-ack'){
       if(!this.journal||label!==(this.fresh?'state':'events')||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.tick))return;
       const now=Date.now();if(now-(this.snapshotAckWindow??0)>=1000){this.snapshotAckWindow=now;this.snapshotAckCount=0;}if(++this.snapshotAckCount>120)return this.peer.close('snapshot-ack-flood');
       this.world.postMessage({type:'snapshotAck',client:this.id,epoch:m.epoch,tick:m.tick});
@@ -80,6 +98,7 @@ export class GameSession {
       if (!text) return;
       this.chatTimes.push(now); this.world.postMessage({ type:'chat', client:this.id, text, team:m.team === true });
     } else if (m.type === 'input' || m.type === 'inputs') {
+      if(this.entity&&label==='state'&&m.entityAck)this.message('state',{type:'entity-ack',...m.entityAck});
       if(this.fresh && label==='state' && m.snapshotAck)this.message('state',{type:'snapshot-ack',...m.snapshotAck});
       const commands = m.type === 'input' ? [m.command] : m.commands;
       if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
@@ -102,6 +121,16 @@ export class GameSession {
     return {...this.transportCounters,queuedReliableBytes:this.bytes+this.rawBytes,reliableAgeMs:Number.isFinite(oldest)?Math.max(0,performance.now()-oldest):0,bulkBuffered:this.peer.channels?.get('bulk')?.bufferedAmount()??0,stateBuffered:this.peer.channels?.get('state')?.bufferedAmount()??0};
   }
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
+  entityPacket(m) {
+    if(!this.entity||this.closed)return;
+    const bytes=Buffer.from(m.buffer);
+    if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
+    if((this.peer.channels?.get('state')?.bufferedAmount()??0)>0){this.transportCounters.stateDropped++;return;}
+    const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
+    if(!accepted){this.transportCounters.stateDropped++;return;}
+    this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
+    this.world.postMessage({type:'entitySent',client:this.id,epoch:m.epoch,packetId:m.packetId});
+  }
   async unorderedSnapshot(m,magic=JOURNAL_MAGIC,versionSlot='snapshotVersion') {
     const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);
     const expendable=magic===TRANSIENTS_MAGIC;
