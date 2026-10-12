@@ -168,7 +168,7 @@ async function serve() {
         status,
         tick,
         error,
-        multiplayerReady: status === "running" && Boolean(local) && world?.inputAckStatus !== "stalled",
+        multiplayerReady: status === "running" && Boolean(local) && (world?.inputAckStatus ?? "running") === "running",
         inputAckStatus: world?.inputAckStatus ?? "running",
         networkContract: world?.networkContract ?? null,
       }),
