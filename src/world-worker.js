@@ -1,3 +1,4 @@
+import { EntityEventStore } from './entity-event-store.js';
 import { entityImportance } from './entity-importance.js';
 import { EntityBudget } from './entity-budget.js';
 import { EntityEdges } from './entity-edges.js';
@@ -29,10 +30,12 @@ try {
     const input=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-input.js')));
     const edges=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-edges.js')));
     const shots=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-shots.js')));
+    const combat=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-combat.js')));
     const summary=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-summary.js')));
-    entityRuntime={...capture,...registry,...codec,...stream,...input,...edges,...shots,...summary};
+    entityRuntime={...capture,...registry,...codec,...stream,...input,...edges,...shots,...summary,...combat};
   } catch {}
-  let entityRegistry,entityCapture,entityShots;
+  let entityRegistry,entityCapture,entityShots,combatCapture,combatDispose;
+  const combatStore=new EntityEventStore();
   try { ({partitionSnapshotEvents}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-transients.js')))); } catch {}
   try { ({SnapshotJournal:Journal,SnapshotMemoryLimit}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-journal.js')))); } catch {}
   if(typeof Journal?.prototype.pin!=='function'||typeof Journal?.prototype.unpin!=='function')Journal=null;
@@ -53,6 +56,8 @@ try {
     const publicationKeyframe=[...clients].some(([id,state])=>state.started&&(state.keyframe||world.players.get(id)?.keyframe));
     const groups=new Map();
     let semanticRecords,commonSummaries;
+    let combatChanges=[];const combatFaults=combatCapture?.drainFaults()??[];
+    if(combatCapture)try{combatChanges=combatStore.update(combatCapture.drain(),game.worldClock.tick,entityRuntime.prepareEntityRecord,entityRuntime.decodeCombat);}catch(error){combatFaults.push(String(error.message).slice(0,160));}
     const eligibilityCache=new Map();
     for (const [client, state] of clients) if (state.started) {
       if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
@@ -75,6 +80,12 @@ try {
             }
             for(const prepared of commonSummaries)state.entity.update(prepared,4);
             for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false,eligibilityCache}))state.entity.update(record,4);
+            if(combatFaults.length)parentPort.postMessage({type:'entityDiagnostics',client,actors:combatFaults.map(message=>({id:0,message:String(message).slice(0,160)}))});
+            for(const event of state.combatReady?combatChanges:combatStore.records.values()){
+              const priority=[event.view.ownerId,event.view.targetId,event.view.attackerId].includes(actor.unit?.id)?24:entityImportance(event.view,interest);
+              state.entity.updateEvent({...event,record:event.prepared},priority);
+            }
+            state.combatReady=true;
             const own=actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
             const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
             const offer=(packet,ownCorrection)=>{
@@ -184,6 +195,9 @@ try {
         if(m.entity&&!entityRegistry){
           entityRegistry=entityRuntime.createEntityRegistry(game.data,{contentEpoch:1,inputCodes:entityRuntime.INPUT_CODES,bindingProfiles:entityRuntime.DEFAULT_BINDING_PROFILES,posts:game.posts.posts});
           entityShots=new entityRuntime.EntityShotCounters(game.simEvents);
+          combatCapture=new entityRuntime.CombatCapture({tick:()=>game.worldClock.tick,definitionId:entityRegistry.combat.definitionId,generation:1});
+          combatDispose=entityRuntime.attachCombatCapture(game,combatCapture);
+          process.once('exit',()=>combatDispose?.());
           entityCapture=new entityRuntime.EntityWorldCapture(game,entityRegistry,{fireCounter:unit=>entityShots.counter(unit)});
         }
         await world.addPlayer(m.client, { spectator: m.spectator, reliableFire:true, separateActions:m.separateActions===true });
@@ -245,7 +259,7 @@ try {
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
         else if (m.method === 'inspect') {
           const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
-          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?{profile:'entity-v1',payloadBytesPerSecond:26000,burstBytes:2200,ownNominalHz:20,...clients.get(m.client).entityMetrics,offeredBytes:clients.get(m.client).entityBudget.offeredBytes,admissionAgeTicks:[...clients.get(m.client).entity.records.values()].map(entry=>({id:entry.record.id,kind:entry.record.kind,age:Number.isFinite(entry.last)?game.worldClock.tick-entry.last:null}))}:undefined,inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
+          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?{profile:'entity-v1',payloadBytesPerSecond:26000,burstBytes:2200,ownNominalHz:20,...clients.get(m.client).entityMetrics,events:{...clients.get(m.client).entity.eventMetrics,retained:clients.get(m.client).entity.events.size,bytes:clients.get(m.client).entity.eventBytes,globalDropped:combatStore.dropped},offeredBytes:clients.get(m.client).entityBudget.offeredBytes,admissionAgeTicks:[...clients.get(m.client).entity.records.values()].map(entry=>({id:entry.record.id,kind:entry.record.kind,age:Number.isFinite(entry.last)?game.worldClock.tick-entry.last:null}))}:undefined,inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
         }
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
