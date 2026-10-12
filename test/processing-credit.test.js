@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {returnProcessingCredit} from '../src/processing-credit.js';
+import {returnProcessingCredit,completePublicationCapture} from '../src/processing-credit.js';
 test('deferred processing credit remains attached to originating match after rotation',()=>{
  const oldMessages=[],newMessages=[],pending=[];
  const oldWorld={postMessage:m=>oldMessages.push(m)},newWorld={postMessage:m=>newMessages.push(m)};
@@ -14,3 +14,5 @@ test('deferred processing credit remains attached to originating match after rot
 });
 
 test('probe only credits the exact completed incarnation after synchronous consumers',()=>{const sent=[],pending=[];const world={postMessage:m=>sent.push(m)};const batch={type:'inputAck',inputAckBatchId:1,inputAckIncarnation:'a'};returnProcessingCredit(world,batch,f=>pending.push(f));const probe={...batch,type:'inputAckProbe'};returnProcessingCredit(world,probe);assert.equal(sent.at(-1).processed,false);pending.shift()();returnProcessingCredit(world,probe);assert.equal(sent.at(-1).processed,true);returnProcessingCredit(world,{...probe,inputAckIncarnation:'b'});assert.equal(sent.at(-1).processed,false);});
+
+test('capture probes cannot replay another match or unprocessed capture',()=>{const sent=[];const old={postMessage:m=>sent.push(m)},current={postMessage:()=>{throw Error('wrong match');}};const capture={id:8,incarnation:'old'};returnProcessingCredit(old,{type:'publicationCaptureProbe',...capture});assert.equal(sent.at(-1).processed,false);completePublicationCapture(old,capture);returnProcessingCredit(old,{type:'publicationCaptureProbe',...capture});assert.equal(sent.at(-1).processed,true);returnProcessingCredit(old,{type:'publicationCaptureProbe',...capture,incarnation:'new'});assert.equal(sent.at(-1).processed,false);assert.equal(current.publicationCaptureProcessed,undefined);});

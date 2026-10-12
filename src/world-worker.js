@@ -51,7 +51,7 @@ try {
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   const sendParent=(message,transfer)=>{if(workerData.publicationWorker){if(message.client&&message.sessionIncarnation===undefined)message={...message,sessionIncarnation:clients.get(message.client)?.publicationIncarnation};if(message.recipients)message={...message,recipients:message.recipients.map(r=>({...r,sessionIncarnation:r.sessionIncarnation??clients.get(r.client)?.publicationIncarnation}))};}parentPort.postMessage(message,transfer);};
   let publicationSession=0;
-  const publication=workerData.publicationWorker?new PublicationBridge({engine:root,maxClients:workerData.publicationMaxClients??192,fatal:message=>{clearInterval(timer);inputAcks?.close();sendParent({type:'publicationFatal',message});},send:(message,transfer)=>sendParent(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
+  const publication=workerData.publicationWorker?new PublicationBridge({engine:root,onState:status=>sendParent({type:'publicationCaptureStatus',status}),maxClients:workerData.publicationMaxClients??192,fatal:message=>{clearInterval(timer);inputAcks?.close();sendParent({type:'publicationFatal',message});},send:(message,transfer)=>sendParent(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
   const inputAcks=publication?new LatestBatch(message=>sendParent(message),{fatal:message=>publication.terminal(message),onState:status=>sendParent({type:'inputAckStatus',status})}):null;
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
@@ -208,6 +208,7 @@ try {
       if(m.type==='inputAckBatchProcessed')inputAcks?.processed(m.inputAckBatchId,m.inputAckIncarnation);
       else if(m.type==='inputAckProbeResult')inputAcks?.probeResult(m);
       else if(m.type==='publicationCaptureProcessed')publication?.processed(m);
+      else if(m.type==='publicationCaptureProbeResult')publication?.probeResult(m);
       else if(m.type==='resetMetrics'){publication?.resetMetrics();if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;sendParent({type:'metricsReset',tick:game.worldClock.tick});}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} sendParent({type:'metrics',publication:publication?.metricsSnapshot(),threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
