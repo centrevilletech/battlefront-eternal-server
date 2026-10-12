@@ -130,3 +130,20 @@ test('inspection exposes only the authenticated session transport counters',()=>
   const result=peer.sent.at(-1)[1];session.flush();assert.equal(session.transportDiagnostics().reliableBytes,Buffer.byteLength(JSON.stringify({type:'test'})));assert.equal(result.transport.stateGroups,0);assert.equal(result.transport.bulkBuffered,0);assert(result.transport.reliableAgeMs>=0);
  }finally{session.close();}
 });
+
+test('fresh state ACK admission and input feedback never depend on reliable bulk',async()=>{
+ const peer=new EventEmitter();peer.remote={capabilities:['fresh-state-v1']};peer.sent=[];peer.send=(lane,value)=>{peer.sent.push({lane,value});return true;};peer.sendBinary=()=>true;let buffered=1;
+ peer.channels=new Map([['state',{bufferedAmount:()=>buffered}]]);peer.sendStatePacket=(frames,options)=>{assert.equal(options.maxBuffered,0);peer.sent.push({lane:'state',frames});return true;};peer.close=()=>peer.emit('closed');
+ const world=new EventEmitter();world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
+ try{
+  assert(world.sent[0].fresh);assert(world.sent[0].separateActions&&world.sent[0].compactMetadata&&world.sent[0].linearProjectiles);assert(session.binary);assert(!world.sent[0].relativeSnapshots&&!world.sent[0].transientSnapshots);
+  const snapshot={buffer:Buffer.from('fresh'),sharedId:'fresh:1',snapshotEpoch:2,snapshotTick:30,capturedAtUnixMs:Date.now(),metadata:{playerId:1}};
+  const before=compressionStats.calls;await session.unorderedSnapshot(snapshot);assert.equal(compressionStats.calls,before);assert(!world.sent.some(m=>m.type==='snapshotSent'));
+  world.emit('message',{type:'inputAck',client:'player',ack:12,ackTick:29,serverTick:30,generation:1,epoch:1});assert.equal(peer.sent.at(-1).value.type,'input-ack');assert.equal(peer.sent.at(-1).lane,'state');
+  buffered=0;await session.unorderedSnapshot(snapshot);assert.deepEqual(world.sent.at(-1),{type:'snapshotSent',client:'player',epoch:2,tick:30});
+  const frame=decodeBulkFrame(peer.sent.at(-1).frames[0]);assert(frame.metadata.transportTiming.offeredAtUnixMs>=frame.metadata.transportTiming.compressionFinishedAtUnixMs);
+  peer.emit('message','state',{type:'inputs',commands:[],snapshotAck:{epoch:2,tick:30},client:'victim'});assert(world.sent.some(m=>m.type==='snapshotAck'&&m.client==='player'&&m.tick===30));
+  const count=world.sent.length;peer.emit('message','events',{type:'snapshot-ack',epoch:2,tick:33});assert.equal(world.sent.length,count,'fresh ACKs do not use reliable events');
+  peer.sendStatePacket=()=>false;await session.unorderedSnapshot({...snapshot,sharedId:'fresh:2',snapshotTick:33});assert.equal(world.sent.filter(m=>m.type==='snapshotSent').length,1,'failed native admission cannot authorize a baseline');
+ }finally{session.close();}
+});

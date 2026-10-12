@@ -28,7 +28,7 @@ export class Peer extends EventEmitter {
   }) {
     super();
     this.keys = keys;this.stateBufferLimit=stateBufferLimit;
-    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1','snapshot-relative-v1','snapshot-transients-v1'].includes(value));
+    this.capabilities = capabilities.filter(value=>['compact-personal-v1','binary-bulk-v1','input-state-v1','linear-projectiles-v1','snapshot-journal-v1','snapshot-relative-v1','snapshot-transients-v1','fresh-state-v1'].includes(value));
     this.initiator = initiator;
     this.expectedKey = expectedKey;
     this.compatibility = { protocol, simulation, content };
@@ -252,9 +252,9 @@ export class Peer extends EventEmitter {
     const ch=this.channels.get(label);if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>(label==='state'?this.stateBufferLimit:65536))return false;
     if(value.byteLength>32768)throw Error('binary message too large');ch.sendMessageBinary(Buffer.from(value));return true;
   }
-  sendStatePacket(frames) {
+  sendStatePacket(frames, {maxBuffered=this.stateBufferLimit}={}) {
     const ch=this.channels.get('state');
-    if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>this.stateBufferLimit)return false;
+    if(!this.authenticated||!ch?.isOpen()||ch.bufferedAmount()>maxBuffered)return false;
     if(!Array.isArray(frames)||!frames.length||frames.length>128||frames.some(frame=>frame.byteLength>32768)||frames.reduce((n,frame)=>n+frame.byteLength,0)>2*1024*1024)throw Error('Invalid state packet group');
     // Admit a complete bounded snapshot, then apply backpressure to later ones.
     for(const frame of frames)ch.sendMessageBinary(Buffer.from(frame));

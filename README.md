@@ -102,3 +102,34 @@ Use `--journal=1 --transients=1` for local qualification; production clients do 
 enable this experimental mode by default.
 
 For isolated transport experiments, `BFE_EXPERIMENTAL_SCTP_SEND_BUFFER` sets the native SCTP send buffer (32768–1048576 bytes), `BFE_EXPERIMENTAL_STATE_BUFFER` sets the application state-channel admission threshold (1024–65536 bytes), and `BFE_EXPERIMENTAL_JOURNAL_FRAME` sets the journal fragment target (512–20000 bytes). Unset variables preserve existing defaults. These controls do not enable journal mode or change negotiated client reliability; they are diagnostic settings, not qualified production recommendations.
+
+The staged `fresh-state-v1` successor is opt-in and replaces recurring reliable
+snapshot dependencies. Its qualification invariants are:
+
+- Input consumption feedback travels on unordered state independently of world
+  decoding. It releases transport resend bookkeeping, never authoritative replay
+  history that still belongs to an older applied state.
+- Only a completely materialized/applied snapshot can be acknowledged. The
+  server accepts a baseline ACK only for an epoch/tick actually admitted to the
+  native sender for that authenticated peer, with monotonic advancement.
+- Every admitted journal snapshot can become a baseline. Ordinary publication
+  continues from the last confirmed baseline while newer ACKs are lost. There
+  is no pending-checkpoint stop-and-wait gate.
+- Missing or expired baselines trigger bounded-cadence newest absolute recovery,
+  never a recurring reliable checkpoint or replay of an indefinitely old
+  bootstrap. Late snapshots can populate immutable caches without rewinding the
+  rendered world.
+- Admission requires an empty state send buffer before compression and before
+  enqueue. Unsent superseded application work is discarded. This is a queue
+  bound, not an ACK-per-publication rate limit.
+- Snapshot history is bounded by count, age and conservatively accounted bytes;
+  only currently needed baselines are pinned. Membership/deletion remains exact
+  for this interim whole-world journal format.
+
+Tests must cover dropped/reordered ACKs, ACKs for offered-but-unsent snapshots,
+late candidates, epoch changes, history eviction, recovery freshness and input
+continuity during downstream blackholes. This interim format still uses whole
+world fragment groups and presentation calls. It does not satisfy the final
+per-entity, datagram-sized protocol or qualify 64-player performance. It will be
+retired with the legacy transport when the semantic entity successor passes the
+same acceptance gates; experimental modes are not permanent product choices.

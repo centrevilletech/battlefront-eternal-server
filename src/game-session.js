@@ -7,10 +7,10 @@ function compress(world, buffer, sharedId) {
   let cache=sharedCompression.get(world);
   if(!cache)sharedCompression.set(world,cache=new Map());
   if(sharedId!==undefined && cache.has(sharedId))return cache.get(sharedId);
-  const begun=performance.now(); compressionStats.calls++;
+  const begun=performance.now(),compressionStartedAtUnixMs=Date.now(); compressionStats.calls++;
   const promise=new Promise((resolve,reject)=>deflate(Buffer.from(buffer),{level:6},(error,result)=>{
     compressionStats.durations.push(performance.now()-begun);if(compressionStats.durations.length>4096)compressionStats.durations.shift();
-    if(error)reject(error);else resolve({buffer:result,base64:null});
+    if(error)reject(error);else resolve({buffer:result,base64:null,compressionStartedAtUnixMs,compressionFinishedAtUnixMs:Date.now()});
   }));
   if(sharedId!==undefined){cache.set(sharedId,promise);while(cache.size>128)cache.delete(cache.keys().next().value);}
   return promise;
@@ -21,21 +21,25 @@ export class GameSession {
   constructor(peer, world, id, welcome, options={}) {
     this.journalFrameBytes=Math.max(256,Math.min(20000,options.journalFrameBytes??transportTuning.journalFrameBytes));
     this.peer = peer; this.world = world; this.id = id; this.queue = []; this.bytes = 0; this.serial = 0; this.started = false; this.pending=[]; this.rawBytes=0; this.compressionEpoch=0; this.closed=false;this.binary=Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('binary-bulk-v1')&&typeof peer.sendBinary==='function';
-    this.journal=peer.remote?.capabilities?.includes('snapshot-journal-v1')&&typeof peer.sendBinary==='function';
+    this.fresh=peer.remote?.capabilities?.includes('fresh-state-v1')&&typeof peer.sendBinary==='function';
+    if(this.fresh)this.binary=true;
+    this.journal=(this.fresh||peer.remote?.capabilities?.includes('snapshot-journal-v1'))&&typeof peer.sendBinary==='function';
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,transientGroups:0,transientBytes:0,transientDropped:0,reliableBytes:0};
     this.listener = (m) => {
       const recipient = m.recipients?.find(value=>value.client===id);
       if (m.client !== id && !recipient) return;
       if(recipient)m={...m,...recipient};
-      if(m.type==='journalTransients')this.unorderedSnapshot(m,TRANSIENTS_MAGIC,'transientVersion');
+      if(m.type==='snapshotFault')peer.close(m.reason);
+      else if(m.type==='journalTransients')this.unorderedSnapshot(m,TRANSIENTS_MAGIC,'transientVersion');
       else if(m.type==='journalEvents')this.packet(m.buffer,undefined,m.sharedId,EVENTS_MAGIC);
-      else if(m.type==='journalPacket'){if(m.reliable)this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC);else this.unorderedSnapshot(m);}
+      else if(m.type==='journalPacket'){if(m.reliable&&!this.fresh)this.packet(m.buffer,m.metadata,m.sharedId,JOURNAL_MAGIC);else this.unorderedSnapshot(m);}
       else if (m.type === 'packet') {
         if (this.awaitKeyframe && !m.keyframe) return;
         if (m.keyframe) this.awaitKeyframe = false;
         this.packet(m.buffer,m.metadata,m.sharedId);
       }
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, binaryBulk:this.binary, ...m.player, playerId: m.player.unitId, tick: m.tick });
+      else if(m.type==='inputAck'){if(this.fresh)peer.send('state',{...m,type:'input-ack'});}
       else if (m.type === 'fireAck') peer.send('events',m);
       else if (m.type === 'chat') peer.send('events', m);
       else if (m.type === 'reply') { peer.send('events', m.resultType==='inspection'?{...m,transport:this.transportDiagnostics()}:m); if(m.error && m.id === undefined)peer.close('invalid-input'); }
@@ -45,16 +49,16 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.once('closed', () => this.close());
     this.timer = setInterval(() => this.flush(), 5); this.timer.unref();
-    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, journal:this.journal,transientSnapshots:this.journal&&peer.remote?.capabilities?.includes('snapshot-transients-v1')===true,relativeSnapshots:peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
+    world.postMessage({ type: 'join', client: id, spectator: peer.spectator, journal:this.journal,fresh:this.fresh,transientSnapshots:!this.fresh&&this.journal&&peer.remote?.capabilities?.includes('snapshot-transients-v1')===true,relativeSnapshots:!this.fresh&&peer.remote?.capabilities?.includes('snapshot-relative-v1')===true, linearProjectiles:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('linear-projectiles-v1'), separateActions:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('input-state-v1'), compactMetadata:this.fresh||Array.isArray(peer.remote?.capabilities)&&peer.remote.capabilities.includes('compact-personal-v1') });
   }
   message(label, m) {
     if(this.closed)return;
     if(m.type==='snapshot-ack'){
-      if(!this.journal||label!=='events'||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.tick))return;
+      if(!this.journal||label!==(this.fresh?'state':'events')||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.tick))return;
       const now=Date.now();if(now-(this.snapshotAckWindow??0)>=1000){this.snapshotAckWindow=now;this.snapshotAckCount=0;}if(++this.snapshotAckCount>120)return this.peer.close('snapshot-ack-flood');
       this.world.postMessage({type:'snapshotAck',client:this.id,epoch:m.epoch,tick:m.tick});
     }else if(m.type==='snapshot-resync'){
-      if(this.journal&&label==='events'&&this.allowResync())this.world.postMessage({type:'snapshotResync',client:this.id});
+      if(this.journal&&label===(this.fresh?'state':'events')&&this.allowResync())this.world.postMessage({type:'snapshotResync',client:this.id});
     }else if(m.type==='actions'){
       if(label!=='events'||!Number.isSafeInteger(m.id)||!Number.isSafeInteger(m.tick)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.actions)||m.actions.length>64||(m.human!==undefined&&!Array.isArray(m.human))||(m.human?.length??0)>8)return this.peer.close('invalid-actions');
       const now=Date.now();if(now-(this.actionWindow??0)>=1000){this.actionWindow=now;this.actionCount=0;}if(++this.actionCount>120)return this.peer.close('action-flood');
@@ -76,6 +80,7 @@ export class GameSession {
       if (!text) return;
       this.chatTimes.push(now); this.world.postMessage({ type:'chat', client:this.id, text, team:m.team === true });
     } else if (m.type === 'input' || m.type === 'inputs') {
+      if(this.fresh && label==='state' && m.snapshotAck)this.message('state',{type:'snapshot-ack',...m.snapshotAck});
       const commands = m.type === 'input' ? [m.command] : m.commands;
       if (!Array.isArray(commands) || commands.length > 32) return this.peer.close();
       const now=Date.now();if(now-(this.inputWindow??0)>=1000){this.inputWindow=now;this.inputCount=0;}
@@ -101,16 +106,19 @@ export class GameSession {
     const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);
     const expendable=magic===TRANSIENTS_MAGIC;
     const counter=expendable?'transient':'state';
+    const stateBusy=()=>this.fresh&&(this.peer.channels?.get('state')?.bufferedAmount()??0)>0;
+    if(stateBusy()){this.transportCounters[counter+'Dropped']++;return;}
     const reliableBusy=()=>this.pending.length||this.queue.length||this.inflight||(this.peer.channels?.get('bulk')?.bufferedAmount()??0)>0;
     if(m.buffer.byteLength>2*1024*1024)return this.peer.close('snapshot-memory-limit');
     try {
       const compressed=await compress(this.world,m.buffer,m.sharedId);
-      if(this.closed||version!==this[versionSlot]||expendable&&reliableBusy()){this.transportCounters[counter+'Dropped']++;return;}
+      if(this.closed||version!==this[versionSlot]||stateBusy()||expendable&&reliableBusy()){this.transportCounters[counter+'Dropped']++;return;}
+      if(this.fresh)m={...m,metadata:{...m.metadata,transportTiming:{capturedAtUnixMs:m.capturedAtUnixMs,compressionStartedAtUnixMs:compressed.compressionStartedAtUnixMs,compressionFinishedAtUnixMs:compressed.compressionFinishedAtUnixMs,offeredAtUnixMs:Date.now()}}};
       const data=compressed.buffer,id=++this.serial,size=Math.max(256,Math.ceil(data.length/128),this.journalFrameBytes-Buffer.byteLength(JSON.stringify(m.metadata??{}))-16),total=Math.ceil(data.length/size);
       const frames=[];for(let index=0;index<total;index++)frames.push(encodeBulkFrame({magic,id:id>>>0,index,total,data:data.subarray(index*size,(index+1)*size),...(index===0?{metadata:m.metadata}:{})}));
       let accepted=true;
-      if(this.peer.sendStatePacket)accepted=this.peer.sendStatePacket(frames);else for(const frame of frames)if(!this.peer.sendBinary(frame,'state')){accepted=false;break;}
-      if(accepted){this.transportCounters[counter+'Groups']++;this.transportCounters[counter+'Bytes']+=frames.reduce((n,frame)=>n+frame.length,0);}else this.transportCounters[counter+'Dropped']++;
+      if(this.peer.sendStatePacket)accepted=this.peer.sendStatePacket(frames,this.fresh?{maxBuffered:0}:{});else for(const frame of frames)if(!this.peer.sendBinary(frame,'state')){accepted=false;break;}
+      if(accepted){this.transportCounters[counter+'Groups']++;this.transportCounters[counter+'Bytes']+=frames.reduce((n,frame)=>n+frame.length,0);if(this.fresh&&magic===JOURNAL_MAGIC)this.world.postMessage({type:'snapshotSent',client:this.id,epoch:m.snapshotEpoch,tick:m.snapshotTick});}else this.transportCounters[counter+'Dropped']++;
     }catch{this.peer.close('snapshot-compression-error');}
   }
   packet(buffer, metadata, sharedId, magic) {
