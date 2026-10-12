@@ -66,6 +66,7 @@ export class GameSession {
     if(this.closed)return;
     if(m.type==='entity-edge-ack'){
       if(!this.entity||label!=='state'||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.ids)||m.ids.length>32||m.ids.some(id=>!Number.isSafeInteger(id)||id<1))return;
+      const now=Date.now();if(now-(this.entityAckWindow??0)>=1000){this.entityAckWindow=now;this.entityAckCount=0;}if(++this.entityAckCount>120)return this.peer.close('entity-ack-flood');
       this.world.postMessage({type:'entityEdgeAck',client:this.id,epoch:m.epoch,generation:m.generation,ids:m.ids});
     }else if(m.type==='entity-ack'){
       if(!this.entity||label!=='state'||!Number.isSafeInteger(m.epoch)||m.epoch<1||!Number.isSafeInteger(m.packetId)||m.packetId<1)return;
@@ -123,6 +124,7 @@ export class GameSession {
   enqueue(message) { Object.defineProperty(message,'queuedAt',{value:performance.now()}); this.queue.push(message); }
   entityPacket(m) {
     if(!this.entity||this.closed)return;
+    if(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250){this.transportCounters.stateDropped++;return;}
     const bytes=Buffer.from(m.buffer);
     if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
     if((this.peer.channels?.get('state')?.bufferedAmount()??0)>0){this.transportCounters.stateDropped++;return;}

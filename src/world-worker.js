@@ -27,7 +27,8 @@ try {
     const input=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-input.js')));
     const edges=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-edges.js')));
     const shots=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-shots.js')));
-    entityRuntime={...capture,...registry,...stream,...input,...edges,...shots};
+    const summary=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-summary.js')));
+    entityRuntime={...capture,...registry,...stream,...input,...edges,...shots,...summary};
   } catch {}
   let entityRegistry,entityCapture,entityShots;
   try { ({partitionSnapshotEvents}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-transients.js')))); } catch {}
@@ -59,10 +60,11 @@ try {
             semanticRecords??=entityCapture.capture(game.worldClock.tick);
             if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
             for(const record of semanticRecords)state.entity.update(record,record.kind==='seat'||record.kind==='tombstone'?4:1);
+            for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client}))state.entity.update(record,4);
             const actor=world.players.get(client),own=entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
             const packet=state.entity.packet({tick:game.worldClock.tick,own,ackInput:actor.mailbox.ack,ackActions:actor.actions?.ack??0,ackFire:actor.fire?.received??0});
             const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
-            parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,buffer},[buffer]);
+            parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,capturedAtUnixMs,buffer},[buffer]);
           } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
           continue;
         }
@@ -140,11 +142,11 @@ try {
   const step = () => {
     const begun=performance.now();
     for(const [client,state]of clients)if(state.entityEdges&&state.started){
-      const actor=world.players.get(client);if(actor.unit.generation!==state.entityEdges.generation)state.entityEdges.reset(1,actor.unit.generation);
-      state.entityEdges.advance(game.worldClock.tick+1);
+      try{const actor=world.players.get(client);if(actor.unit.generation!==state.entityEdges.generation)state.entityEdges.reset(1,actor.unit.generation);
+      state.entityEdges.advance(game.worldClock.tick+1);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});}
     }
     const tick=world.step();
-    for(const state of clients.values())state.entityEdges?.consumed(); measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed();}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
@@ -159,7 +161,7 @@ try {
         if(m.entity&&m.spectator)throw Error('semantic spectator mode not implemented');
         if(m.fresh && (!Journal || typeof SnapshotMemoryLimit!=='function'))throw Error('fresh state requires the bounded journal runtime');
         if(m.entity&&!entityRegistry){
-          entityRegistry=entityRuntime.createEntityRegistry(game.data,{contentEpoch:1,inputCodes:entityRuntime.INPUT_CODES,bindingProfiles:entityRuntime.DEFAULT_BINDING_PROFILES});
+          entityRegistry=entityRuntime.createEntityRegistry(game.data,{contentEpoch:1,inputCodes:entityRuntime.INPUT_CODES,bindingProfiles:entityRuntime.DEFAULT_BINDING_PROFILES,posts:game.posts.posts});
           entityShots=new entityRuntime.EntityShotCounters(game.simEvents);
           entityCapture=new entityRuntime.EntityWorldCapture(game,entityRegistry,{fireCounter:unit=>entityShots.counter(unit)});
         }
