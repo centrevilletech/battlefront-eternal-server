@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {returnProcessingCredit} from './processing-credit.js';
 import {PublicationCoordinator} from './publication-coordinator.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -197,8 +198,7 @@ async function serve() {
       if(m.type==='publicationCapture'){const controls=m.controls.filter(c=>matchWorld.publicationSessions?.get(c.client)?.publicationIncarnation===c.incarnation),active=new Set(controls.map(c=>c.client));for(const id of publication.clients.keys())if(!active.has(id))publication.leave(id);for(const c of controls){if(publication.clients.get(c.client)?.incarnation!==c.incarnation)publication.join(c.client,c.incarnation);for(const receipt of c.acks)publication.receipt('acks',receipt);}publication.capture({...m.capture,recipients:m.capture.recipients.filter(r=>active.has(r.client)&&matchWorld.publicationSessions.get(r.client).publicationIncarnation===r.sessionIncarnation)});matchWorld.postMessage({type:'publicationCaptureProcessed',id:m.id});}
       else if(m.type==='metrics'&&publication){m.publication={...publication.metricsSnapshot(),bridge:m.publication};}
       else if(m.type==='metricsReset')publication?.resetMetrics();
-      else if(m.type==='inputAck'&&m.inputAckBatchId){queueMicrotask(()=>world.postMessage({type:'inputAckBatchProcessed',inputAckBatchId:m.inputAckBatchId}));}
-      else if(m.type==='publicationBatchDone'){world.postMessage({...m,type:'publicationBatchProcessed'});}
+      else if(returnProcessingCredit(matchWorld,m)){}
       else if(m.type==='publicationFatal'){status='fault';error=m.message;await online?.close();await local?.close();await matchWorld.terminate();}
       else if (m.type === "ready") {
         if(process.env.BFE_PUBLICATION_WORKER==='1'){
