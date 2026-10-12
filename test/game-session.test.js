@@ -118,5 +118,15 @@ test('opt-in transient effects use an independent replaceable lane without super
   peer.send=()=>false;peer.sendBinary=()=>false;session.enqueue({type:'important'});
   await session.unorderedSnapshot({buffer:Buffer.from('expendable'),sharedId:'blocked-effect'},0x34424642,'transientVersion');
   assert.equal(peer.sent.length,2);
+  const metrics=session.transportDiagnostics();assert.equal(metrics.stateGroups,1);assert.equal(metrics.transientGroups,1);assert.equal(metrics.transientDropped,1);assert(metrics.stateBytes>0&&metrics.transientBytes>0);
+ }finally{session.close();}
+});
+
+
+test('inspection exposes only the authenticated session transport counters',()=>{
+ const {peer,world,session}=setup();try{
+  world.emit('message',{type:'reply',client:'other',resultType:'inspection'});assert.equal(peer.sent.length,0);
+  session.enqueue({type:'test'});world.emit('message',{type:'reply',client:'player',resultType:'inspection'});
+  const result=peer.sent.at(-1)[1];assert.equal(result.transport.stateGroups,0);assert.equal(result.transport.bulkBuffered,0);assert(result.transport.reliableAgeMs>=0);
  }finally{session.close();}
 });
