@@ -125,7 +125,7 @@ export class GameSession {
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:0})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
-    this.world.postMessage({type:'entitySent',client:this.id,epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
+    this.world.postMessage({type:'entitySent',client:this.id,sessionIncarnation:m.sessionIncarnation,epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
   }
   async unorderedSnapshot(m,magic=JOURNAL_MAGIC,versionSlot='snapshotVersion') {
     const version=this[versionSlot]=m.replaceKey??((this[versionSlot]??0)+1);

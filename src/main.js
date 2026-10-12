@@ -184,13 +184,17 @@ async function serve() {
         maxPlayers: config.maxPlayers ?? 64,
         armySize:32,
         metrics:metricsEnabled,
+        publicationMaxClients:(config.maxPlayers??64)*3,
         publicationWorker:process.env.BFE_PUBLICATION_WORKER==='1',
         ...(metricsEnabled&&process.env.BFE_WORLD_PROFILE?{profile:resolve(process.env.BFE_WORLD_PROFILE)}:{}),
       },
     });
     status = "loading";
     world.on("message", async (m) => {
-      if (m.type === "ready") {
+      if(m.type==='inputAck'&&m.inputAckBatchId){world.postMessage({type:'inputAckBatchProcessed',inputAckBatchId:m.inputAckBatchId});}
+      else if(m.type==='publicationBatchDone'){world.postMessage({...m,type:'publicationBatchProcessed'});}
+      else if(m.type==='publicationFatal'){status='fault';error=m.message;await online?.close();await local?.close();await world.terminate();}
+      else if (m.type === "ready") {
         status = "running";
         config.content = m.content;
         const activeConfig = { ...config, rotation:[...config.rotation.slice(rotationIndex), ...config.rotation.slice(0,rotationIndex)] };

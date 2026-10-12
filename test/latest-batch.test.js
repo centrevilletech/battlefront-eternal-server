@@ -1,0 +1,2 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {LatestBatch} from '../src/latest-batch.js';
+test('input ACK lane replaces pending batches independently of state publication',()=>{const sent=[];const lane=new LatestBatch(m=>sent.push(m));lane.offer([{client:'a',ack:1}]);for(let ack=2;ack<=100;ack++)lane.offer([{client:'a',ack}]);assert.equal(sent.length,1);lane.processed(999);assert.equal(sent.length,1);lane.processed(1);assert.equal(sent.length,2);assert.equal(sent[1].recipients[0].ack,100);lane.close();});

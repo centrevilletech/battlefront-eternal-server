@@ -1,3 +1,4 @@
+import {LatestBatch} from './latest-batch.js';
 import {PublicationCoordinator} from './publication-coordinator.js';
 import { liveActorRoster } from './actor-roster.js';
 import { EntityEventStore } from './entity-event-store.js';
@@ -46,7 +47,8 @@ try {
   let journal,lastJournalId,eventSerial=0;
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   let publicationSession=0;
-  const publication=workerData.publicationWorker?new PublicationCoordinator({engine:root,send:(message,transfer)=>parentPort.postMessage(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
+  const publication=workerData.publicationWorker?new PublicationCoordinator({engine:root,maxClients:workerData.publicationMaxClients??192,fatal:message=>parentPort.postMessage({type:'publicationFatal',message}),send:(message,transfer)=>parentPort.postMessage(message,transfer),report:message=>console.error('Publication worker:',message)}):null;
+  const inputAcks=publication?new LatestBatch(message=>parentPort.postMessage(message),{fatal:message=>publication.terminal(message)}):null;
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
@@ -61,12 +63,12 @@ try {
     // invalidate another recipient's already-issued initial journal baseline.
     const publicationKeyframe=[...clients].some(([id,state])=>state.started&&(state.keyframe||world.players.get(id)?.keyframe));
     const groups=new Map();
-    let semanticRecords,commonSummaries;const publicationRecipients=[];
+    let semanticRecords,commonSummaries;const publicationRecipients=[];const inputAckRecipients=[];
     let combatChanges=[];const combatFaults=combatCapture?.drainFaults()??[];
     if(combatCapture)try{combatChanges=combatStore.update(combatCapture.drain(),game.worldClock.tick,entityRuntime.prepareEntityRecord,entityRuntime.decodeCombat);}catch(error){combatFaults.push(String(error.message).slice(0,160));}
     const eligibilityCache=new Map();
     for (const [client, state] of clients) if (state.started) {
-      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
+      if(state.fresh){const actor=world.players.get(client);if(actor)(inputAcks?message=>inputAckRecipients.push(message):message=>parentPort.postMessage(message))({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
         const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
         if(state.entityReady){
@@ -119,6 +121,7 @@ try {
       if(!group)groups.set(packet.sharedId,group={type:'packet',sharedId:packet.sharedId,buffer:packet.buffer.slice(0),recipients:[]});
       group.recipients.push({client,keyframe,metadata:state.compactMetadata && typeof compactMetadata==='function' ? compactMetadata(packet.metadata) : packet.metadata});
     }
+    if(inputAcks)inputAcks.offer(inputAckRecipients);
     if(publication&&publicationRecipients.length)publication.capture({tick:game.worldClock.tick,capturedAtUnixMs,records:semanticRecords??[],summaries:commonSummaries??[],events:[...combatStore.records.values()].map(e=>({record:e.prepared.record,expiresTick:e.expiresTick,retention:e.retention})),recipients:publicationRecipients});
     for(const group of groups.values()) {
       const journalRecipients=group.recipients.filter(r=>clients.get(r.client).journal);
@@ -196,7 +199,9 @@ try {
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content });
   parentPort.on('message', async m => {
     try {
-      if(m.type==='resetMetrics'){publication?.resetMetrics();if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
+      if(m.type==='inputAckBatchProcessed')inputAcks?.processed(m.inputAckBatchId);
+      else if(m.type==='publicationBatchProcessed')publication?.processed(m);
+      else if(m.type==='resetMetrics'){publication?.resetMetrics();if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',publication:publication?.metricsSnapshot(),threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,linearProjectiles:world.linearProjectiles===true,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
         Object.assign(m,{entity:true,journal:true,fresh:true,compactMetadata:true,linearProjectiles:true,separateActions:true,relativeSnapshots:false,transientSnapshots:false});
