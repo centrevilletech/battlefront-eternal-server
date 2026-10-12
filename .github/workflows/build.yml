@@ -4,13 +4,22 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      fast:
+        description: "Deploy main without the test matrix (play-testing only)"
+        type: boolean
+        default: false
 concurrency:
   group: server-${{ github.ref }}
   cancel-in-progress: false
 permissions:
   contents: read
+# A fast deploy skips the three-platform test matrix: a main push whose
+# message contains [fast], or a manual run with the fast input. The image
+# build and the health-gated rollout still run.
 jobs:
   test:
+    if: ${{ !(inputs.fast || contains(github.event.head_commit.message, '[fast]')) }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -24,7 +33,7 @@ jobs:
       - run: npm test
   image:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: ${{ always() && (needs.test.result == 'success' || needs.test.result == 'skipped') && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,7 +52,7 @@ jobs:
           tags: ghcr.io/joshualambert/battlefront-eternal-server:sha-${{ github.sha }}
   deploy:
     needs: image
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+    if: ${{ always() && needs.image.result == 'success' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true' }}
     runs-on: [self-hosted, aldine, deploy, bfe-server]
     timeout-minutes: 15
     environment: production
