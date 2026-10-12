@@ -1,6 +1,6 @@
 {
   "status": "Diagnostic comparisons, not release or 64-player qualification",
-  "method": "Two local authenticated peers, real Linux UDP netem, 50 ms each direction, 15 second warmup and 20 second observation; loss cases use 5 percent independent UDP loss. Native journal cases enable relative vectors; Chromium cases do not. Source dirty flags identify unreleased working-tree inputs. Native loss-only includes CPU profiler overhead. Payload bandwidth counters exclude network overhead and retransmissions.",
+  "method": "Two local authenticated peers, real Linux UDP netem, 50 ms each direction, 15 second warmup and 20 second observation; each case records its independent UDP loss percentage. Native journal cases enable relative vectors; Chromium cases do not. Source dirty flags identify unreleased working-tree inputs. Native loss-only includes CPU profiler overhead. Payload bandwidth counters exclude network overhead and retransmissions.",
   "cases": [
     {
       "scenario": "Native, no loss or jitter",
@@ -350,6 +350,144 @@
         "journal": true,
         "relative": false,
         "transients": true
+      }
+    },
+    {
+      "scenario": "Chromium journal, TTL100, no loss or jitter",
+      "sourceReport": "chromium-ttl100-lossless.json",
+      "source": {
+        "engine": {
+          "revision": "3cb3a322c2ad728303c5a640ad576fad09bbdfce",
+          "dirty": true
+        },
+        "server": {
+          "revision": "a460f062a90b685b5086df61238354ac5bdc2ea2",
+          "dirty": true
+        }
+      },
+      "stateAgeP95Ms": 100,
+      "stateAgeMaxMs": 116.66666666666667,
+      "actionP95Ms": 279.89999985694885,
+      "connected": 2,
+      "errors": [],
+      "impairment": {
+        "kind": "Linux tc netem on isolated namespace UDP traffic",
+        "delayEachDirectionMs": 50,
+        "jitterMs": 0,
+        "packetLossPercent": 0.0
+      },
+      "negotiated": [
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        },
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        }
+      ],
+      "requestedProtocol": {
+        "journal": true,
+        "relative": false,
+        "transients": false
+      },
+      "payloadBytesPerPlayerSecond": {
+        "received": 70305.18928665927,
+        "sent": 17719.376406354317
+      }
+    },
+    {
+      "scenario": "Chromium journal, TTL100, one percent loss",
+      "sourceReport": "chromium-ttl100-loss1.json",
+      "source": {
+        "engine": {
+          "revision": "3cb3a322c2ad728303c5a640ad576fad09bbdfce",
+          "dirty": true
+        },
+        "server": {
+          "revision": "a0269b0ec9538b0ab35d58994428d9bdc038ab1f",
+          "dirty": false
+        }
+      },
+      "stateAgeP95Ms": 116.66666666666667,
+      "stateAgeMaxMs": 166.66666666666666,
+      "actionP95Ms": 215.89999985694885,
+      "connected": 2,
+      "errors": [],
+      "impairment": {
+        "kind": "Linux tc netem on isolated namespace UDP traffic",
+        "delayEachDirectionMs": 50,
+        "jitterMs": 0,
+        "packetLossPercent": 1.0
+      },
+      "negotiated": [
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        },
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        }
+      ],
+      "requestedProtocol": {
+        "journal": true,
+        "relative": false,
+        "transients": false
+      },
+      "payloadBytesPerPlayerSecond": {
+        "received": 72282.88505013198,
+        "sent": 17693.48452490618
+      }
+    },
+    {
+      "scenario": "Chromium journal, TTL100, five percent loss plus jitter",
+      "sourceReport": "chromium-ttl100-loss5-jitter.json",
+      "source": {
+        "engine": {
+          "revision": "da70afdffd125ea678e23dfbfa23f3132a4ca23f",
+          "dirty": true
+        },
+        "server": {
+          "revision": "a0269b0ec9538b0ab35d58994428d9bdc038ab1f",
+          "dirty": true
+        }
+      },
+      "stateAgeP95Ms": 983.3333333333334,
+      "stateAgeMaxMs": 1183.3333333333333,
+      "actionP95Ms": 715.3999998569489,
+      "connected": 2,
+      "errors": [],
+      "impairment": {
+        "kind": "Linux tc netem on isolated namespace UDP traffic",
+        "delayEachDirectionMs": 50,
+        "jitterMs": 15,
+        "packetLossPercent": 5.0
+      },
+      "negotiated": [
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        },
+        {
+          "journal": true,
+          "transients": false,
+          "stateLifeMs": 100
+        }
+      ],
+      "requestedProtocol": {
+        "journal": true,
+        "relative": false,
+        "transients": false
+      },
+      "payloadBytesPerPlayerSecond": {
+        "received": 72371.1830825193,
+        "sent": 17360.694393238384
       }
     }
   ],
