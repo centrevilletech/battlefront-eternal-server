@@ -1,7 +1,7 @@
 # Battlefront Eternal server
 
 GPL-3.0-only headless authoritative multiplayer server. It runs the shared game
-simulation with independent human controllers, bots and per-player replicas over
+simulation with independent human controllers, bots and per-player entity state over
 authenticated encrypted WebRTC channels. This is a development build.
 
 Run `npm ci && npm test`, then `node src/main.js` for the local setup menu and
@@ -33,18 +33,13 @@ lived. Server identity and DTLS certificate persist across restarts. With
 `honorGlobalBans` enabled the server verifies signed expiring ban lists, pins the
 master signing key on first use and refreshes the list every two minutes.
 
-Input commands use an unordered channel. Replica deltas currently use reliable
-ordered bulk messages so a dropped update cannot corrupt the chain. The simulation runs at 60 Hz; compressed replicas are sent at 20 Hz, preserving
-transient calls between snapshots. Initial snapshots are chunked below the channel message limit and stalled clients have
-a bounded backlog. This is correctness-first transport; full-match bandwidth
-and performance qualification remain open.
-
-`scripts/world-peers-smoke.mjs` runs two authenticated clients against the real
-Theed simulation and checks separate actor identities and streamed snapshots.
-It requires locally imported data. Add `--relay` to verify the same two-player
-gameplay through the public master and Aldine relay. `scripts/relay-smoke.mjs` checks the deployed
-relay over UDP, TCP, TLS and IPv4/IPv6 combinations. `scripts/signaling-smoke.mjs`
-checks public master rendezvous. Their temporary directory listings are removed.
+Input commands and independent entity records use an unordered channel. The
+simulation runs at 60 Hz. The engine's shared entity host schedules remote
+updates at nominal 20 Hz, with additional own-player corrections. A reliable
+registry identifies classes, weapons and posts; entity records establish both
+the initial scene and ongoing gameplay. There is no replica snapshot bootstrap.
+The same engine host implements local play, desktop HOST and dedicated hosting.
+The server owns authentication, transport, administration and the worker loop.
 
 A Dockerfile, Compose example and systemd unit are included. Mount the engine
 and imported data read-only and persist `/data`. A Linux Docker host should use
@@ -84,29 +79,19 @@ Local capacity testing uses `node --max-old-space-size=6144 scripts/load-peers.m
 Dedicated hosts default to native RTC and use UDP when allocating their own TURN relay. Remote clients can still reach that allocation through their own TCP or TLS relay connection. `BFE_PORTABLE_RTC=1` or configuration `portableRTC: true` selects the portable backend for desktop packaging or hosts requiring TCP/TLS-only egress. `node scripts/relay-smoke.mjs --mixed` checks native-host interoperability with portable TCP/TLS clients using the configured public connectivity infrastructure.
 
 All online, LAN and desktop HOST sessions require the one contract exported by
-`src/runtime/network-contract.js` in the mounted engine. The current staged
-engine uses protocol 2, `bfe-sim-5`, profile `entity-state-v1`, and correction schema
-8. Before gameplay readiness, the server validates manifest version 1 and adapter
-ABI 1 and checks the runtime correction export against the manifest. Missing or
-incompatible manifests fail startup. Discovery, signaling, identity proofs and
-sessions all use that validated contract; the server has no fallback simulation
-string. Older clients receive an update-required version error. There is no
-capability negotiation or legacy gameplay fallback.
+`src/runtime/network-contract.js` in the mounted engine. The current engine uses
+protocol 2, `bfe-sim-17`, profile `entity-state-v1`, correction schema 10 and
+server adapter ABI 2. Missing or incompatible manifests fail startup before
+advertising gameplay readiness. Older clients receive an update-required error;
+there is no capability negotiation or legacy gameplay fallback.
 
-Adapter ABI 1 fixes the server-owned BNI1/BNE1 envelope magic, 1100-byte limit,
-30-byte state header and tick offset 12, epoch/input/edge semantics, and worker API
-shapes. Engine-owned record bodies may evolve with a new mandatory simulation
-revision while these interfaces remain unchanged. Changing the adapter ABI needs
-a matched server or atomic pair deployment. Stage this manifest on the existing
-simulation-five engine before deploying a server that requires it.
-The identity proof uses the `BFE/2` transcript and the same signed peer identities.
-
-One reliable registry/initial-world bootstrap establishes the scene. Ongoing
-state consists of independent absolute entity messages of at most 1100 bytes on
-an unordered channel with a fixed 50 ms lifetime. Each native admission receipt
-authorizes only that packet's membership ACK. Missing actors are unchanged;
-lifecycle removal requires a tombstone. The current own correction includes consumed
-and discarded input watermarks, authoritative held controls and view context.
+ABI 2 removes the replica bootstrap and delegates joins and ongoing publication
+to the engine-owned entity host. Deploy this adapter with the matching engine.
+The BNI1/BNE1 envelopes retain their 1100-byte limit and 30-byte state header.
+State uses independent absolute entity messages on an unordered channel. Each
+native admission receipt authorizes only that packet's membership ACK. Missing
+actors are unchanged; lifecycle removal requires a tombstone. The own correction
+includes consumed and discarded input watermarks, held controls and view context.
 
 Compact BNI1 input carries held state, cumulative look and independent numbered
 edges. Durable receipt stops retransmission; explicit consumed/expired/cancelled
@@ -114,20 +99,17 @@ results retire prediction only when an applied correction reaches their outcome
 tick. Consumption means the simulation received the control, not that a weapon
 fired or hit anything. Independent input ACKs never imply discarded input executed.
 
-The fixed scheduler reserves nominal 20 Hz own correction and bounds offered
-state payload to 26,000 bytes/second with a 2,200-byte burst. Remaining credit
-admits remote-only messages sized to the remaining credit. Authoritative distance,
-closing speed, aim direction and a vehicle priority floor determine importance.
-Common actor and battle/post records are prepared once per publication and shared
-across recipient schedulers. Native admission age is
-separate from actual delivery age; control traffic and network overhead are
-outside this state budget.
+The engine scheduler defaults to 100,000 bytes/second of state payload per
+connected client. Control traffic and network overhead are outside this budget,
+and own-player corrections have a starvation fallback. The 200 kbit/s goal is a
+future compact encoding target, not the current setting. Armies remain capped
+at 32 per team (64 players total, replacing bots); 64 versus 64 is unsupported.
+Distance, closing speed, aim direction and a vehicle priority floor determine
+importance. Captured common records are shared across recipient schedulers.
 
-Ground-driver correction exists, but full mounted gameplay, stationary turrets,
-walkers, special units, complete effects/gameplay parity and
-64-player latency, coverage and bandwidth qualification remain outstanding.
-Historical load scripts and transport reports describe retired protocols; use
-the private engine's current Chromium/netem harness for matched protocol-2 tests.
+Historical load scripts and transport reports describe retired protocols. Use
+the engine's entity-path probes for current checks. Full 64-player capacity,
+physical M1 rendering and impaired-network qualification remain separate gates.
 
 Local operator profiling is disabled by default. Start with
 `BFE_WORLD_METRICS=1` and optionally `BFE_WORLD_PROFILE=/tmp/world.cpuprofile`.

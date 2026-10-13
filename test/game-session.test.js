@@ -1,25 +1,18 @@
 import { CONTRACT } from './contract-fixture.js';
-import { randomBytes } from 'node:crypto';
-import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { decodeBulkFrame } from '../src/bulk-frame.js';
-import { GameSession, compressionStats } from '../src/game-session.js';
-test('mandatory entity initial join admits only after all reliable fragments and cannot repeat',async()=>{
- const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.send=()=>true;
- let accepted=0,blocked=true;peer.sendBinary=()=>{if(blocked&&accepted===1)return false;accepted++;return true;};peer.close=()=>peer.emit('closed');
- const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
+import { GameSession } from '../src/game-session.js';
+test('entity registry and welcome establish the session without a replica bootstrap',()=>{
+ const {peer,world,session}=setup();const registry={classes:[[1,'rep_inf_trooper']]};
  try {
-  const initial={type:'journalPacket',client:'player',reliable:true,initialBootstrap:true,snapshotEpoch:1,snapshotTick:3,buffer:randomBytes(50000),sharedId:'join'};
-  world.emit('message',initial);
-  for(let n=0;n<100&&session.draining;n++)await new Promise(r=>setTimeout(r,2));
-  assert.equal(accepted,1);assert(!world.sent.some(m=>m.type==='snapshotSent'));
-  blocked=false;await drained(session);
-  assert.deepEqual(world.sent.at(-1),{type:'snapshotSent',client:'player',epoch:1,tick:3,initialBootstrap:true});
-  const sent=accepted;world.emit('message',initial);await drained(session);assert.equal(accepted,sent);
-  const recovery=[];session.unorderedSnapshot=m=>recovery.push(m);
-  world.emit('message',{...initial,initialBootstrap:false,snapshotEpoch:2});assert.equal(recovery.length,0);
+  world.emit('message',{type:'entityRegistry',client:'player',registry});
+  world.emit('message',{type:'joined',client:'player',player:{unitId:7,generation:2,snapshotMode:'entity-v1'},tick:30});
+  assert.deepEqual(peer.sent,[{lane:'events',m:{type:'entity-registry',registry}},{lane:'events',m:{type:'welcome',unitId:7,generation:2,snapshotMode:'entity-v1',playerId:7,tick:30}}]);
+  const count=world.sent.length;
+  peer.emit('message','state',{type:'snapshot-ack',epoch:1,tick:30});
+  peer.emit('message','state',{type:'snapshot-resync'});
+  assert.equal(world.sent.length,count,'retired snapshot traffic cannot drive the world');
  } finally {session.close();}
 });
 
@@ -38,10 +31,9 @@ test('semantic packets are unfragmented and only native admission authorizes exa
  } finally {session.close();}
 });
 
-async function drained(session){for(let n=0;n<400;n++){session.flush();if(!session.draining&&!session.pending.length&&!session.queue.length)return;await new Promise(r=>setTimeout(r,5));}throw Error('compression drain timed out');}
 function setup(){const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
 test('legacy peers cannot construct a session',()=>{assert.throws(()=>new GameSession({remote:{protocol:1}},Object.assign(new EventEmitter(),{networkContract:CONTRACT}),'player',{}),/Update required/);});
-test('fixed profile has no capability negotiation and rejects JSON gameplay',()=>{const {peer,world,session}=setup();try{assert.deepEqual(world.sent[0],{type:'join',client:'player',spectator:undefined,name:'Player',entity:true,journal:true,fresh:true,transientSnapshots:false,relativeSnapshots:false,linearProjectiles:true,separateActions:true,compactMetadata:true});peer.emit('message','state',{type:'inputs',commands:[]});assert(session.closed);}finally{session.close();}});
+test('fixed profile has no capability negotiation and rejects JSON gameplay',()=>{const {peer,world,session}=setup();try{assert.deepEqual(world.sent[0],{type:'join',client:'player',spectator:undefined,name:'Player',entity:true});peer.emit('message','state',{type:'inputs',commands:[]});assert(session.closed);}finally{session.close();}});
 test('compact input and edge ACKs bind authenticated identity',()=>{const {peer,world,session}=setup();try{const b=Buffer.alloc(16);b.writeUInt32LE(0x31494e42);peer.emit('binary',b,'state');assert.equal(world.sent.at(-1).type,'entityInput');assert.equal(world.sent.at(-1).client,'player');peer.emit('message','state',{type:'entity-edge-ack',epoch:1,generation:3,ids:[9],client:'victim'});assert.deepEqual(world.sent.at(-1),{type:'entityEdgeAck',client:'player',epoch:1,generation:3,ids:[9]});}finally{session.close();}});
 test('chat and inspection control remain bounded and identity scoped',()=>{const {peer,world,session}=setup();try{for(let i=0;i<6;i++)peer.emit('message','events',{type:'chat',text:'hello',client:'victim',sender:'Admin'});const messages=world.sent.filter(m=>m.type==='chat');assert.equal(messages.length,4);assert(messages.every(m=>m.client==='player'&&!m.sender));peer.emit('message','events',{type:'call',id:3,method:'stop'});assert.equal(peer.sent.at(-1).m.error,'Unsupported operation');}finally{session.close();}});
 test('independent ACK preserves consumed and discarded watermarks separately',()=>{const {peer,world,session}=setup();try{world.emit('message',{type:'inputAck',client:'player',ack:7,ackTick:20,discardedInput:9,discardedActions:11});assert.equal(peer.sent.at(-1).lane,'state');assert.equal(peer.sent.at(-1).m.ack,7);assert.equal(peer.sent.at(-1).m.discardedInput,9);}finally{session.close();}});

@@ -12,12 +12,12 @@ import { startLocalServer } from '../src/local-server.js';
 import { GameSession } from '../src/game-session.js';
 
 test('contract validation rejects missing, unsupported and invalid manifests without defaults',()=>{
- for(const value of [undefined,null,{}, {...CONTRACT,manifestVersion:2},{...CONTRACT,serverAdapterABI:2},{...CONTRACT,protocol:3},{...CONTRACT,profile:'legacy'}, {...CONTRACT,simulation:'test'},{...CONTRACT,ownCorrectionSchema:0},{...CONTRACT,ownCorrectionSchema:1.5}])assert.throws(()=>validateNetworkContract(value));
+ for(const value of [undefined,null,{}, {...CONTRACT,manifestVersion:2},{...CONTRACT,serverAdapterABI:1},{...CONTRACT,protocol:3},{...CONTRACT,profile:'legacy'}, {...CONTRACT,simulation:'test'},{...CONTRACT,ownCorrectionSchema:0},{...CONTRACT,ownCorrectionSchema:1.5}])assert.throws(()=>validateNetworkContract(value));
  const next=validateNetworkContract({...CONTRACT,simulation:'bfe-sim-999',ownCorrectionSchema:9});
  assert.equal(next.simulation,'bfe-sim-999');assert.equal(next.ownCorrectionSchema,9);assert.ok(Object.isFrozen(next));
 });
 
-for(const [name,value]of [['missing',undefined],['invalid',{...CONTRACT,simulation:'bad'}],['ABI mismatch',{...CONTRACT,serverAdapterABI:2}]])test(`worker rejects ${name} manifest before creating gameplay or becoming ready`,async()=>{
+for(const [name,value]of [['missing',undefined],['invalid',{...CONTRACT,simulation:'bad'}],['ABI mismatch',{...CONTRACT,serverAdapterABI:1}]])test(`worker rejects ${name} manifest before creating gameplay or becoming ready`,async()=>{
  const engine=await mkdtemp(join(tmpdir(),'bfe-manifest-test-'));let worker;
  try{
   await mkdir(join(engine,'src/runtime'),{recursive:true});await writeFile(join(engine,'package.json'),'{"type":"module"}');
