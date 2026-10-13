@@ -69,14 +69,23 @@ try {
     const eligibilityCache=new Map();
     for (const [client, state] of clients) if (state.started) {
       if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,dropped:Math.floor(measurements.droppedTicks),discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
+      // Publications are staggered: publish() runs every tick and each
+      // client takes its full turn on one tick in three (its phase), so
+      // capture cost and datagram bursts no longer land on one tick for
+      // every client at once. Between full turns an entity client still
+      // gets a fresh own correction every other tick (see below).
+      const fullTurn=(game.worldClock.tick+(state.publishPhase??0))%3===0;
       if(state.entity){
         const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
         if(state.entityReady){
           try {
+           if(fullTurn||game.worldClock.tick%2===0){
+           const actor=world.players.get(client);
+           if(fullTurn){
             semanticRecords??=entityCapture.capture(game.worldClock.tick).map(entityRuntime.prepareEntityRecord);
             commonSummaries??=entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1}).map(entityRuntime.prepareEntityRecord);
             if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
-            const actor=world.players.get(client),vehicle=actor.unit?.seat?.vehicle,soldier=actor.unit?.soldier;
+            const vehicle=actor.unit?.seat?.vehicle,soldier=actor.unit?.soldier;
             const position=(vehicle?.position||actor.unit?.position)?.toArray(),velocity=(vehicle?.velocity||soldier?.velocity)?.toArray();
             let forward;
             if(vehicle?.quaternion){const {x,y,z,w}=vehicle.quaternion;forward=[2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)];}
@@ -94,6 +103,7 @@ try {
               state.entity.updateEvent({...event,record:event.prepared},priority);
             }
             state.combatReady=true;
+           }
             const own=actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
             const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
             const offer=(packet,ownCorrection,force=false)=>{
@@ -113,7 +123,7 @@ try {
             let packet=null,ownForced=false;
             try{packet=state.entity.packet({...fields,own,maxBytes:Math.max(30,Math.min(1100,state.entityBudget.available(begun)))});}catch{packet=null;}
             if(!packet&&own){packet=state.entity.packet({...fields,own});ownForced=true;}
-            if(offer(packet,!!own,ownForced)){
+            if(offer(packet,!!own,ownForced)&&fullTurn){
               // Remote coverage: keep filling datagrams while the budget allows,
               // so the whole field refreshes each publication instead of being
               // rationed by distance. Earlier offers this tick are excluded.
@@ -125,11 +135,13 @@ try {
                 offered.push(next.packetId);
               }
             }
+           }
           } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
           continue;
         }
         if(state.fresh.joinIssued)continue;
       }
+      if(!fullTurn)continue;
       const keyframe=Boolean(publicationKeyframe||state.keyframe), packet=world.snapshot(client,{keyframe,sharedPacket:true});
       state.keyframe=false;if(!packet)continue;
       if(packet instanceof ArrayBuffer){parentPort.postMessage({type:'packet',client,buffer:packet,keyframe},[packet]);continue;}
@@ -206,7 +218,7 @@ try {
       state.entityEdges.advance(game.worldClock.tick+1);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});}
     }
     const tick=world.step();
-    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed(tick);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); if (tick % 3 === 0) publish(); if (tick % 300 === 0) report();
+    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed(tick);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); publish(); if (tick % 300 === 0) report();
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
@@ -233,7 +245,7 @@ try {
         // Players join at the spawn screen and choose their side unless the
         // operator configured autoSpawn / autoAssignTeams (the original's SET GAME OPTIONS).
         await world.addPlayer(m.client, { spectator: m.spectator, name: typeof m.name === 'string' && m.name ? m.name.slice(0, 32) : 'Player', reliableFire:true, separateActions:m.separateActions===true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
-        clients.set(m.client, { started: false, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,entityBudget:m.entity?new EntityBudget(stateBudget):null,entityMetrics:{ownOffered:0,remoteOffered:0,admitted:0,budgetDropped:0,lastOwnTick:null},compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
+        clients.set(m.client, { started: false, publishPhase:clients.size%3, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,entityBudget:m.entity?new EntityBudget(stateBudget):null,entityMetrics:{ownOffered:0,remoteOffered:0,admitted:0,budgetDropped:0,lastOwnTick:null},compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
         if(m.entity)clients.get(m.client).entityEdges=new EntityEdges({Receiver:entityRuntime.EntityEdgeReceiver,actor:world.players.get(m.client),world,client:m.client,registry:entityRegistry});
         if(m.entity)parentPort.postMessage({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:m.entity?'entity-v1':clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
