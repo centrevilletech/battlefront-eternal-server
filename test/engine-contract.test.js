@@ -46,7 +46,8 @@ test('a newer correction schema is accepted when the engine manifest and impleme
    'src/runtime/world-state.js':'export function worldState(){}',
    'src/runtime/shared-packet.js':'export function compactMetadata(){}',
    'src/runtime/content-hash.js':'export async function contentHash(){return "fixture"}',
-   'src/runtime/network-entity-player.js':'export const OWN_PLAYER_SCHEMA=9;'
+   'src/runtime/network-entity-player.js':'export const OWN_PLAYER_SCHEMA=9;',
+   'src/runtime/entity-host.js':'export function createEntityHost(){}'
   };
   for(const name of ['capture','registry','codec','stream','input','edges','shots','combat','summary'])modules[`src/runtime/network-entity-${name}.js`]='export {}';
   await Promise.all(Object.entries(modules).map(([name,body])=>writeFile(join(root,name),body)));

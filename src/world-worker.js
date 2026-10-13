@@ -1,9 +1,5 @@
 import { loadNetworkContract } from './network-contract.js';
 import { liveActorRoster } from './actor-roster.js';
-import { EntityEventStore } from './entity-event-store.js';
-import { entityImportance } from './entity-importance.js';
-import { EntityBudget, readStateBudget } from './entity-budget.js';
-import { EntityEdges } from './entity-edges.js';
 import { FreshStateWindow } from './fresh-state.js';
 import { Session } from 'node:inspector';
 import { writeFile } from 'node:fs/promises';
@@ -24,10 +20,7 @@ try {
   const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
   const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
-  // Per-client downstream state budget (entity-budget.js). At most this many
-  // 1,100-byte datagrams go out per 20 Hz publication, budget permitting.
-  const stateBudget=readStateBudget(workerData),maxPacketsPerPublication=10;
-  let Journal,SnapshotMemoryLimit,partitionSnapshotEvents,entityRuntime;
+  let Journal,SnapshotMemoryLimit,partitionSnapshotEvents,entityRuntime,createEntityHost;
   try {
     const capture=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-capture.js')));
     const registry=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-registry.js')));
@@ -40,15 +33,24 @@ try {
     const summary=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-summary.js')));
     const player=await import(pathToFileURL(resolve(root,'src/runtime/network-entity-player.js')));
     if(player.OWN_PLAYER_SCHEMA!==networkContract.ownCorrectionSchema)throw Error(`Engine contract requires own-player correction schema ${networkContract.ownCorrectionSchema}`);
+    const host=await import(pathToFileURL(resolve(root,'src/runtime/entity-host.js')));
+    if(typeof host.createEntityHost!=='function')throw Error('Engine entity host unavailable');
+    createEntityHost=host.createEntityHost;
     entityRuntime={...capture,...registry,...codec,...stream,...input,...edges,...shots,...summary,...combat};
   } catch(error) { throw new Error('Mandatory multiplayer engine runtime unavailable: '+error.message,{cause:error}); }
-  let entityRegistry,entityCapture,entityShots,combatCapture,combatDispose;
-  const combatStore=new EntityEventStore();
   try { ({partitionSnapshotEvents}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-transients.js')))); } catch {}
   try { ({SnapshotJournal:Journal,SnapshotMemoryLimit}=await import(pathToFileURL(resolve(root,'src/runtime/snapshot-journal.js')))); } catch {}
   if(typeof Journal?.prototype.pin!=='function'||typeof Journal?.prototype.unpin!=='function')Journal=null;
   let journal,lastJournalId,eventSerial=0;
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
+  let entityHost=null;
+  const ensureEntityHost=()=>{
+    if(!entityHost){
+      entityHost=createEntityHost({game,world,stateBytesPerSecond:workerData.stateBytesPerSecond});
+      process.once('exit',()=>entityHost?.dispose());
+    }
+    return entityHost;
+  };
   let profiler;
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
@@ -63,82 +65,19 @@ try {
     // invalidate another recipient's already-issued initial journal baseline.
     const publicationKeyframe=[...clients].some(([id,state])=>state.started&&(state.keyframe||world.players.get(id)?.keyframe));
     const groups=new Map();
-    let semanticRecords,commonSummaries;
-    let combatChanges=[];const combatFaults=combatCapture?.drainFaults()??[];
-    if(combatCapture)try{combatChanges=combatStore.update(combatCapture.drain(),game.worldClock.tick,entityRuntime.prepareEntityRecord,entityRuntime.decodeCombat);}catch(error){combatFaults.push(String(error.message).slice(0,160));}
-    const eligibilityCache=new Map();
+    if(entityHost){
+      const out=entityHost.publish({begun,droppedTicks:Math.floor(measurements.droppedTicks)});
+      for(const ack of out.inputAcks)parentPort.postMessage({type:'inputAck',...ack});
+      for(const result of out.edgeResults)parentPort.postMessage({type:'entityEdgeResults',...result});
+      for(const diagnostic of out.diagnostics)parentPort.postMessage({type:'entityDiagnostics',...diagnostic});
+      for(const packet of out.packets)parentPort.postMessage({type:'entityPacket',...packet},[packet.buffer]);
+      for(const fault of out.faults)parentPort.postMessage({type:'snapshotFault',client:fault.client,reason:'entity-prerequisite-failed:'+String(fault.error.message).slice(0,100)});
+    }
     for (const [client, state] of clients) if (state.started) {
-      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,dropped:Math.floor(measurements.droppedTicks),discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
-      // Publications are staggered: publish() runs every tick and each
-      // client takes its full turn on one tick in three (its phase), so
-      // capture cost and datagram bursts no longer land on one tick for
-      // every client at once. Between full turns an entity client still
-      // gets a fresh own correction every other tick (see below).
+      // Journal snapshots keep the same staggered cadence as entity turns.
       const fullTurn=(game.worldClock.tick+(state.publishPhase??0))%3===0;
       if(state.entity){
-        const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
-        if(state.entityReady){
-          try {
-           if(fullTurn||game.worldClock.tick%2===0){
-           const actor=world.players.get(client);
-           if(fullTurn){
-            semanticRecords??=entityCapture.capture(game.worldClock.tick).map(entityRuntime.prepareEntityRecord);
-            commonSummaries??=entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1}).map(entityRuntime.prepareEntityRecord);
-            if(game.worldClock.tick%60===0)parentPort.postMessage({type:'entityDiagnostics',client,actors:entityCapture.unsupported.slice(0,256).map(e=>({id:e.entityId,message:String(e.message).slice(0,160)}))});
-            const vehicle=actor.unit?.seat?.vehicle,soldier=actor.unit?.soldier;
-            const position=(vehicle?.position||actor.unit?.position)?.toArray(),velocity=(vehicle?.velocity||soldier?.velocity)?.toArray();
-            let forward;
-            if(vehicle?.quaternion){const {x,y,z,w}=vehicle.quaternion;forward=[2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)];}
-            else if(soldier){const yaw=soldier.aimYaw,pitch=soldier.aimPitch,c=Math.cos(pitch);forward=[Math.sin(yaw)*c,Math.sin(pitch),Math.cos(yaw)*c];}
-            const interest={position,velocity,forward,flying:!!vehicle?.flying};
-            for(const prepared of semanticRecords){
-              const record=prepared.record;if(!actor.spectator&&record.kind==='soldier'&&record.id===actor.unit?.id)continue;
-              state.entity.update(prepared,entityImportance(record,interest));
-            }
-            for(const prepared of commonSummaries)state.entity.update(prepared,4);
-            for(const record of entityRuntime.captureWorldSummaries(game,world,entityRegistry,{tick:game.worldClock.tick,epoch:1,playerId:client,includeCommon:false,eligibilityCache}))state.entity.update(record,4);
-            if(combatFaults.length)parentPort.postMessage({type:'entityDiagnostics',client,actors:combatFaults.map(message=>({id:0,message:String(message).slice(0,160)}))});
-            for(const event of state.combatReady?combatChanges:combatStore.records.values()){
-              const priority=[event.view.ownerId,event.view.targetId,event.view.attackerId].includes(actor.unit?.id)?24:entityImportance(event.view,interest);
-              state.entity.updateEvent({...event,record:event.prepared},priority);
-            }
-            state.combatReady=true;
-           }
-            const own=actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
-            const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
-            const offer=(packet,ownCorrection,force=false)=>{
-              if(!packet)return false;
-              if(!force&&!state.entityBudget.take(packet.buffer.byteLength,begun)){state.entityMetrics.budgetDropped++;return false;}
-              state.entityMetrics[ownCorrection?'ownOffered':'remoteOffered']++;
-              const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
-              parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs,buffer},[buffer]);return true;
-            };
-            // The first packet is clamped to the budget left, like the fill
-            // packets below; a full-size packet offered against a nearly
-            // empty bucket used to be dropped whole, own correction
-            // included. If the correction alone does not fit what is left
-            // it still goes (force): prediction resets from it every
-            // publication, and a few hundred bytes over budget beats a
-            // correction gap.
-            let packet=null,ownForced=false;
-            try{packet=state.entity.packet({...fields,own,maxBytes:Math.max(30,Math.min(1100,state.entityBudget.available(begun)))});}catch{packet=null;}
-            if(!packet&&own){packet=state.entity.packet({...fields,own});ownForced=true;}
-            if(offer(packet,!!own,ownForced)&&fullTurn){
-              // Remote coverage: keep filling datagrams while the budget allows,
-              // so the whole field refreshes each publication instead of being
-              // rationed by distance. Earlier offers this tick are excluded.
-              const offered=[packet.packetId];
-              for(let n=1;n<maxPacketsPerPublication;n++){
-                const maxBytes=Math.min(1100,state.entityBudget.available(begun));if(maxBytes<=30)break;
-                const next=state.entity.packet({...fields,maxBytes,excludePacketIds:offered});
-                if(!next||!offer(next,false))break;
-                offered.push(next.packetId);
-              }
-            }
-           }
-          } catch(error){parentPort.postMessage({type:'snapshotFault',client,reason:'entity-prerequisite-failed:'+String(error.message).slice(0,100)});}
-          continue;
-        }
+        if(state.entityReady)continue;
         if(state.fresh.joinIssued)continue;
       }
       if(!fullTurn)continue;
@@ -211,14 +150,18 @@ try {
   const matchId = randomUUID();
   const report = () => parentPort.postMessage({type:'scores',match:matchId,players:[...(world.players?.values() ?? [])].filter(p=>!p.spectator).map(p=>({id:p.id,name:p.character.name,kills:p.character.kills-2*p.character.teamKills,deaths:p.character.deaths,points:p.character.captures}))});
   let ended = false;
+  const reportEdgeFaults=faults=>{
+    for(const {client,error} of faults){
+      const state=clients.get(client);if(state)state.started=false;entityHost?.setStarted(client,false);
+      parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});
+    }
+  };
   const step = () => {
     const begun=performance.now();
-    for(const [client,state]of clients)if(state.entityEdges&&state.started){
-      try{const actor=world.players.get(client);if((actor.unit?.generation??0)!==state.entityEdges.generation)state.entityEdges.reset(1,actor.unit?.generation??0);
-      state.entityEdges.advance(game.worldClock.tick+1);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});}
-    }
+    reportEdgeFaults(entityHost?.advanceEdges()??[]);
     const tick=world.step();
-    for(const[client,state]of clients)if(state.entityEdges)try{state.entityEdges.consumed(tick);}catch(error){state.started=false;parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});} measure('sim',performance.now()-begun); publish(); if (tick % 300 === 0) report();
+    reportEdgeFaults(entityHost?.consumedEdges(tick)??[]);
+    measure('sim',performance.now()-begun); publish(); if (tick % 300 === 0) report();
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
   };
@@ -234,43 +177,27 @@ try {
         if (clients.has(m.client)) throw Error('already joined');
         if(m.entity&&!entityRuntime)throw Error('semantic entity runtime unavailable');
         if(m.fresh && (!Journal || typeof SnapshotMemoryLimit!=='function'))throw Error('fresh state requires the bounded journal runtime');
-        if(m.entity&&!entityRegistry){
-          entityRegistry=entityRuntime.createEntityRegistry(game.data,{contentEpoch:1,inputCodes:entityRuntime.INPUT_CODES,bindingProfiles:entityRuntime.DEFAULT_BINDING_PROFILES,posts:game.posts.posts});
-          entityShots=new entityRuntime.EntityShotCounters(game.simEvents);
-          combatCapture=new entityRuntime.CombatCapture({tick:()=>game.worldClock.tick,definitionId:entityRegistry.combat.definitionId,generation:1});
-          combatDispose=entityRuntime.attachCombatCapture(game,combatCapture);
-          process.once('exit',()=>combatDispose?.());
-          entityCapture=new entityRuntime.EntityWorldCapture(game,entityRegistry,{fireCounter:unit=>entityShots.counter(unit)});
-        }
+        const entityRegistryMessage=m.entity?{type:'entityRegistry',client:m.client,registry:ensureEntityHost().descriptor()}:null;
         // Players join at the spawn screen and choose their side unless the
         // operator configured autoSpawn / autoAssignTeams (the original's SET GAME OPTIONS).
         await world.addPlayer(m.client, { spectator: m.spectator, name: typeof m.name === 'string' && m.name ? m.name.slice(0, 32) : 'Player', reliableFire:true, separateActions:m.separateActions===true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
-        clients.set(m.client, { started: false, publishPhase:clients.size%3, entity:m.entity?new entityRuntime.EntityScheduler({epoch:1}):null,entityReady:false,entityBudget:m.entity?new EntityBudget(stateBudget):null,entityMetrics:{ownOffered:0,remoteOffered:0,admitted:0,budgetDropped:0,lastOwnTick:null},compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
-        if(m.entity)clients.get(m.client).entityEdges=new EntityEdges({Receiver:entityRuntime.EntityEdgeReceiver,actor:world.players.get(m.client),world,client:m.client,registry:entityRegistry});
-        if(m.entity)parentPort.postMessage({type:'entityRegistry',client:m.client,registry:entityRuntime.entityRegistryDescriptor(entityRegistry)});
+        clients.set(m.client, { started: false, publishPhase:clients.size%3, entity:m.entity===true,entityReady:false,compactMetadata:m.compactMetadata===true, linearProjectiles:m.linearProjectiles===true,journal:m.journal===true&&!!Journal,fresh:m.fresh===true&&!!Journal?new FreshStateWindow():null,relativeSnapshots:m.relativeSnapshots===true,transientSnapshots:m.transientSnapshots===true&&typeof partitionSnapshotEvents==='function',checkpoints:new Map(),fireDiagnostics:{accepted:0,rejected:0,last:null},inputDiagnostics:{accepted:0,rejected:0,reasons:{},last:{}} });
+        if(m.entity){entityHost.addClient(m.client);parentPort.postMessage(entityRegistryMessage);}
         parentPort.postMessage({ type: 'joined', client: m.client, player: {...world.player(m.client),...(clients.get(m.client).journal?{snapshotMode:m.entity?'entity-v1':clients.get(m.client).fresh?'fresh-v1':'journal-v1',snapshotTransients:clients.get(m.client).transientSnapshots}:{}),...(m.separateActions===true&&typeof world.actions==='function'?{inputMode:'split-v1'}:{})}, tick: game.worldClock.tick });
         {const name=world.players.get(m.client)?.character?.name;if(name&&!m.spectator)notice(`${name} joined the game`,m.client);}
-      } else if (m.type === 'leave') { report(); {const name=clients.has(m.client)?world.players.get(m.client)?.character?.name:null;if(name)notice(`${name} left the game`,m.client);} journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
+      } else if (m.type === 'leave') { report(); {const name=clients.has(m.client)?world.players.get(m.client)?.character?.name:null;if(name)notice(`${name} left the game`,m.client);} journal?.unpin(m.client+':ack');journal?.unpin(m.client+':pending');journal?.unpin(m.client+':join');entityHost?.removeClient(m.client);clients.delete(m.client); world.removePlayer(m.client); updateLinear(); }
       else if(m.type==='entityInput'){
-        const state=clients.get(m.client);if(!state?.entity||!state.started)return;
-        const packet=entityRuntime.decodeEntityInput(new Uint8Array(m.buffer),entityRegistry);
-        if(packet.epoch!==1||packet.generation!==world.players.get(m.client)?.unit?.generation)return;
-        state.entityEdges.receive(packet,game.worldClock.tick);
-        for(const command of packet.commands){
-          const accepted=world.input(m.client,command),stats=state.inputDiagnostics;
-          stats[accepted?'accepted':'rejected']++;stats.last={sequence:command.sequence,tick:command.tick,generation:command.generation,epoch:command.epoch,serverTick:game.worldClock.tick,accepted,lookTotal:command.lookTotal,down:command.down.slice(0,32)};
-        }
-        for(const packetId of packet.receipts)state.entity.ack({epoch:packet.epoch,packetId});
+        if(clients.get(m.client)?.entity)entityHost?.input(m.client,m.buffer);
       }
       else if(m.type==='playerLink'){const actor=world.players.get(m.client);if(actor&&Number.isFinite(m.rtt))actor.link={rtt:m.rtt,path:m.path&&typeof m.path==='object'?{kind:String(m.path.kind||''),family:String(m.path.family||'')}:null};}
-      else if(m.type==='entityEdgeAck'){clients.get(m.client)?.entityEdges?.acknowledge(m);}
-      else if(m.type==='entitySent'){const state=clients.get(m.client);if(m.epoch===1&&state?.entity?.admitted(m.packetId)){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}
-      else if(m.type==='entityDropped'){const state=clients.get(m.client);if(state?.entityBudget&&Number.isSafeInteger(m.bytes))try{state.entityBudget.refund(m.bytes);}catch{}}
-      else if(m.type==='entityAck'){clients.get(m.client)?.entity?.ack({epoch:m.epoch,packetId:m.packetId});}
+      else if(m.type==='entityEdgeAck'){entityHost?.edgeAck(m.client,m);}
+      else if(m.type==='entitySent'){if(m.epoch===1)entityHost?.admitted(m.client,m.packetId,{ownCorrection:m.ownCorrection,tick:m.tick});}
+      else if(m.type==='entityDropped'){entityHost?.dropped(m.client,m.bytes);}
+      else if(m.type==='entityAck'){entityHost?.ack(m.client,{epoch:m.epoch,packetId:m.packetId});}
       else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick,m.initialBootstrap===true);}
       else if(m.type==='snapshotAck') {
         const state=clients.get(m.client),pending=state?.pendingCheckpoint;
-        if(state?.fresh){if(state.fresh.acknowledge(m.epoch,m.tick,tick=>journal?.epoch===m.epoch&&journal.pin(m.client+':ack',tick))){state.snapshotAck=state.fresh.ack;journal.unpin(m.client+':join');if(state.entity){state.entityReady=true;journal.unpin(m.client+':ack');}}return;}
+        if(state?.fresh){if(state.fresh.acknowledge(m.epoch,m.tick,tick=>journal?.epoch===m.epoch&&journal.pin(m.client+':ack',tick))){state.snapshotAck=state.fresh.ack;journal.unpin(m.client+':join');if(state.entity){state.entityReady=true;entityHost?.setReady(m.client);journal.unpin(m.client+':ack');}}return;}
         if(state?.journal&&pending?.epoch===m.epoch&&pending?.tick===m.tick&&journal?.epoch===m.epoch&&journal.snapshots.has(m.tick)){
           if(!journal.pin(m.client+':ack',m.tick))return;journal.unpin(m.client+':pending');state.pendingCheckpoint=null;state.snapshotAck={epoch:m.epoch,tick:m.tick};
         }
@@ -300,13 +227,13 @@ try {
         const player = world.player(m.client);
         let result = { epoch: 1, tick: game.worldClock.tick };
         if (m.method === 'init') result = { ...result, type: 'ready', generation: player.generation, playerId: player.unitId, shared: false };
-        else if (m.method === 'start') { const state=clients.get(m.client);if(!state.started)state.keyframe=true;state.started=true;updateLinear();result.type='started'; }
-        else if (m.method === 'suspend') { clients.get(m.client).started = false; world.clearInput?.(m.client); updateLinear(); result.type = 'suspended'; }
+        else if (m.method === 'start') { const state=clients.get(m.client);if(!state.started)state.keyframe=true;state.started=true;entityHost?.setStarted(m.client,true);updateLinear();result.type='started'; }
+        else if (m.method === 'suspend') { clients.get(m.client).started = false; entityHost?.setStarted(m.client,false); world.clearInput?.(m.client); updateLinear(); result.type = 'suspended'; }
         else if (m.method === 'resync') { clients.get(m.client) && (clients.get(m.client).keyframe = true); }
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
         else if (m.method === 'inspect') {
           const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
-          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?{profile:'entity-v1',payloadBytesPerSecond:clients.get(m.client).entityBudget.rate,burstBytes:clients.get(m.client).entityBudget.burst,maxPacketsPerPublication,ownNominalHz:20,...clients.get(m.client).entityMetrics,events:{...clients.get(m.client).entity.eventMetrics,retained:clients.get(m.client).entity.events.size,bytes:clients.get(m.client).entity.eventBytes,globalDropped:combatStore.dropped},offeredBytes:clients.get(m.client).entityBudget.offeredBytes,admissionAgeTicks:[...clients.get(m.client).entity.records.values()].map(entry=>({id:entry.record.id,kind:entry.record.kind,age:Number.isFinite(entry.last)?game.worldClock.tick-entry.last:null}))}:undefined,inputDiagnostics:clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
+          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:clients.get(m.client).entity?entityHost?.inspect(m.client):undefined,inputDiagnostics:entityHost?.inputDiagnostics(m.client)??clients.get(m.client).inputDiagnostics,fireDiagnostics:clients.get(m.client).fireDiagnostics,players: clients.size, running: Boolean(timer) };
         }
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
