@@ -85,7 +85,7 @@ export class Peer extends EventEmitter {
           this.channel(
             this.pc.createDataChannel(
               label,
-              label === "state" ? { unordered: true, maxPacketLifeTime:50 } : {},
+              label === "state" ? { unordered: true, maxRetransmits: 0 } : {},
             ),
           );
       });

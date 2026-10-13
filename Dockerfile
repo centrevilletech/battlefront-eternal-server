@@ -2,6 +2,7 @@ FROM node:24-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
+COPY scripts ./scripts
 RUN npm ci --omit=dev && mkdir /data && chown node:node /data
 COPY src ./src
 USER node

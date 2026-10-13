@@ -35,4 +35,10 @@ export class EntityBudget {
     if(this.available(now)<bytes){this.denied++;return false;}
     this.tokens-=bytes;this.offeredBytes+=bytes;return true;
   }
+  // Admission downstream (GameSession) can still drop an offered packet;
+  // those bytes were never sent and must not stay charged to the budget.
+  refund(bytes,now=performance.now()) {
+    if(!Number.isSafeInteger(bytes)||bytes<1||bytes>1100)throw Error('invalid entity message size');
+    this.available(now);this.tokens=Math.min(this.burst,this.tokens+bytes);this.offeredBytes=Math.max(0,this.offeredBytes-bytes);
+  }
 }

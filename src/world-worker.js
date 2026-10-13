@@ -68,7 +68,7 @@ try {
     if(combatCapture)try{combatChanges=combatStore.update(combatCapture.drain(),game.worldClock.tick,entityRuntime.prepareEntityRecord,entityRuntime.decodeCombat);}catch(error){combatFaults.push(String(error.message).slice(0,160));}
     const eligibilityCache=new Map();
     for (const [client, state] of clients) if (state.started) {
-      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
+      if(state.fresh){const actor=world.players.get(client);if(actor)parentPort.postMessage({type:'inputAck',client,epoch:1,serverTick:game.worldClock.tick,generation:actor.unit?.generation??0,ack:actor.mailbox.ack,ackTick:actor.mailbox.ackTick,dropped:Math.floor(measurements.droppedTicks),discardedInput:actor.mailbox.discarded??0,discardedActions:actor.actions?.discarded??0,ackActions:state.entity?0:actor.actions?.ack??0});}
       if(state.entity){
         const feedback=state.entityEdges.feedback();if(feedback.received.length||feedback.results.length)parentPort.postMessage({type:'entityEdgeResults',client,...feedback});
         if(state.entityReady){
@@ -96,15 +96,24 @@ try {
             state.combatReady=true;
             const own=actor.spectator?undefined:entityRuntime.capturePlayerCorrection(game,world,client,{registry:entityRegistry,bindingProfileId:0,epoch:1});
             const fields={tick:game.worldClock.tick,ackInput:actor.mailbox.ack,ackActions:0,ackFire:0};
-            const offer=(packet,ownCorrection)=>{
+            const offer=(packet,ownCorrection,force=false)=>{
               if(!packet)return false;
-              if(!state.entityBudget.take(packet.buffer.byteLength,begun)){state.entityMetrics.budgetDropped++;return false;}
+              if(!force&&!state.entityBudget.take(packet.buffer.byteLength,begun)){state.entityMetrics.budgetDropped++;return false;}
               state.entityMetrics[ownCorrection?'ownOffered':'remoteOffered']++;
               const buffer=packet.buffer.buffer.slice(packet.buffer.byteOffset,packet.buffer.byteOffset+packet.buffer.byteLength);
               parentPort.postMessage({type:'entityPacket',client,epoch:1,packetId:packet.packetId,ownCorrection,capturedAtUnixMs,buffer},[buffer]);return true;
             };
-            const packet=state.entity.packet({...fields,own});
-            if(offer(packet,!!own)){
+            // The first packet is clamped to the budget left, like the fill
+            // packets below; a full-size packet offered against a nearly
+            // empty bucket used to be dropped whole, own correction
+            // included. If the correction alone does not fit what is left
+            // it still goes (force): prediction resets from it every
+            // publication, and a few hundred bytes over budget beats a
+            // correction gap.
+            let packet=null,ownForced=false;
+            try{packet=state.entity.packet({...fields,own,maxBytes:Math.max(30,Math.min(1100,state.entityBudget.available(begun)))});}catch{packet=null;}
+            if(!packet&&own){packet=state.entity.packet({...fields,own});ownForced=true;}
+            if(offer(packet,!!own,ownForced)){
               // Remote coverage: keep filling datagrams while the budget allows,
               // so the whole field refreshes each publication instead of being
               // rationed by distance. Earlier offers this tick are excluded.
@@ -244,6 +253,7 @@ try {
       else if(m.type==='playerLink'){const actor=world.players.get(m.client);if(actor&&Number.isFinite(m.rtt))actor.link={rtt:m.rtt,path:m.path&&typeof m.path==='object'?{kind:String(m.path.kind||''),family:String(m.path.family||'')}:null};}
       else if(m.type==='entityEdgeAck'){clients.get(m.client)?.entityEdges?.acknowledge(m);}
       else if(m.type==='entitySent'){const state=clients.get(m.client);if(m.epoch===1&&state?.entity?.admitted(m.packetId)){state.entityMetrics.admitted++;if(m.ownCorrection)state.entityMetrics.lastOwnTick=m.tick;}}
+      else if(m.type==='entityDropped'){const state=clients.get(m.client);if(state?.entityBudget&&Number.isSafeInteger(m.bytes))try{state.entityBudget.refund(m.bytes);}catch{}}
       else if(m.type==='entityAck'){clients.get(m.client)?.entity?.ack({epoch:m.epoch,packetId:m.packetId});}
       else if(m.type==='snapshotSent'){const state=clients.get(m.client);if(state?.fresh&&journal?.epoch===m.epoch)state.fresh.admitted(m.epoch,m.tick,m.initialBootstrap===true);}
       else if(m.type==='snapshotAck') {
