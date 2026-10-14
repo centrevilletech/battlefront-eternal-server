@@ -40,11 +40,16 @@ try {
     const begun=performance.now();
     if(entityHost){
       const out=entityHost.publish({begun,droppedTicks:Math.floor(measurements.droppedTicks)});
-      for(const ack of out.inputAcks)parentPort.postMessage({type:'inputAck',...ack});
-      for(const result of out.edgeResults)parentPort.postMessage({type:'entityEdgeResults',...result});
+      // One worker message per kind (acks and edge results ride the
+      // recipients list) and one per client for its snapshot datagrams:
+      // per-datagram postMessages dominated publication at 64 clients.
+      if(out.inputAcks.length)parentPort.postMessage({type:'inputAck',recipients:out.inputAcks});
+      if(out.edgeResults.length)parentPort.postMessage({type:'entityEdgeResults',recipients:out.edgeResults});
       for(const diagnostic of out.diagnostics)parentPort.postMessage({type:'entityDiagnostics',...diagnostic});
       for(const events of out.reliableEvents??[])parentPort.postMessage({type:'gameplayEvents',...events});
-      for(const packet of out.packets)parentPort.postMessage({type:'entityPacket',...packet},[packet.buffer]);
+      const byClient=new Map();
+      for(const packet of out.packets){let list=byClient.get(packet.client);if(!list)byClient.set(packet.client,list=[]);list.push(packet);}
+      for(const [client,packets] of byClient)parentPort.postMessage({type:'entityPackets',client,packets},packets.map(p=>p.buffer));
       for(const fault of out.faults)parentPort.postMessage({type:'snapshotFault',client:fault.client,reason:'entity-prerequisite-failed:'+String(fault.error.message).slice(0,100)});
     }
     measure('encode',performance.now()-begun);

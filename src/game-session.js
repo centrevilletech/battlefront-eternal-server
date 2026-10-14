@@ -26,6 +26,7 @@ export class GameSession {
       else if(m.type==='entityEdgeResults')this.edgeFeedback(m);
       else if(m.type==='entityRegistry')peer.send('events',{type:'entity-registry',registry:m.registry});
       else if(m.type==='entityPacket')this.entityPacket(m);
+      else if(m.type==='entityPackets')for(const packet of m.packets)this.entityPacket(packet);
       else if(m.type==='gameplayEvents')peer.send('events',{type:'gameplay-events',tick:m.tick,records:m.records.map(r=>({...r,payload:Buffer.from(r.payload).toString('base64')}))});
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
       else if(m.type==='inputAck')this.inputAck(m);
@@ -107,7 +108,10 @@ export class GameSession {
       if(backlog>STATE_BACKLOG_BYTES||(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250)){this.skippedTick=m.tick;this.transportCounters.stateSkippedSnapshots++;}
     }
     if(m.tick===this.skippedTick){this.transportCounters.stateDropped++;return;}
-    const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:STATE_BACKLOG_BYTES})??this.peer.sendBinary(bytes,'state');
+    // Once a snapshot is admitted, every datagram of it is attempted: a
+    // backlog check between its parts would strand it incomplete, the
+    // client could never ack it, and every later delta would grow.
+    const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:Number.MAX_SAFE_INTEGER})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
   }
