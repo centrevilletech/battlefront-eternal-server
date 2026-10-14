@@ -3,6 +3,30 @@ import { wireCompatibility } from './network-contract.js';
 // lifetime expires what is already queued, and the next snapshot is still
 // encoded against the client's acknowledged baseline.
 export const STATE_BACKLOG_BYTES=32768;
+// A snapshot captured more than this long ago is skipped whole at forward
+// time: three publication intervals of queue is already visible lag, and
+// the next snapshot still carries everything against the acknowledged
+// baseline. This caps worker-to-main queueing at a tenth of a second no
+// matter how far the main thread falls behind.
+export const STATE_STALE_MS=100;
+// One 'message' listener per world routes to its sessions by client id.
+// The worker posts ~64 state messages per snapshot; when every session
+// held its own listener, each message cost 64 listener calls of filter
+// work on the main thread that also has to forward them.
+const routers=new WeakMap();
+function routerFor(world){
+  let router=routers.get(world);
+  if(!router){
+    router=new Map();
+    world.setMaxListeners(Math.max(world.getMaxListeners(),256));
+    world.on('message',m=>{
+      if(m.recipients){for(const recipient of m.recipients){const sessions=router.get(recipient.client);if(sessions)for(const session of sessions)session.handleWorld({...m,...recipient});}}
+      else if(m.client!=null){const sessions=router.get(m.client);if(sessions)for(const session of sessions)session.handleWorld(m);}
+    });
+    routers.set(world,router);
+  }
+  return router;
+}
 // The name a peer offered in its hello, as the roster, the scores and chat
 // will show it: printable, trimmed, bounded; absent means the generic name.
 export function playerName(value) {
@@ -17,10 +41,7 @@ export class GameSession {
     if(Object.entries(wire).some(([key,value])=>peer.remote?.[key]!==value)||typeof peer.sendBinary!=='function')throw Error('Update required: snapshot-delta-v1 protocol 2');
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,stateSkippedSnapshots:0};
     this.skippedTick=-1;this.lastPacketTick=-1;
-    this.listener = (m) => {
-      const recipient = m.recipients?.find(value=>value.client===id);
-      if (m.client !== id && !recipient) return;
-      if(recipient)m={...m,...recipient};
+    this.handleWorld = (m) => {
       if(m.type==='snapshotFault'){peer.send('events',{type:'gameplay-error',message:String(m.reason).slice(0,240)});setTimeout(()=>peer.close(m.reason),50).unref();}
       else if(m.type==='entityDiagnostics')peer.send('events',{type:'entity-diagnostics',actors:m.actors});
       else if(m.type==='entityEdgeResults')this.edgeFeedback(m);
@@ -33,8 +54,9 @@ export class GameSession {
       else if (m.type === 'chat') peer.send('events', m);
       else if (m.type === 'reply') { peer.send('events', m.resultType==='inspection'?{...m,transport:this.transportDiagnostics()}:m); if(m.error && m.id === undefined)peer.close('invalid-input'); }
     };
-    world.setMaxListeners(Math.max(world.getMaxListeners(),256));
-    world.on('message', this.listener);
+    this.router=routerFor(world);
+    let sessions=this.router.get(id);if(!sessions)this.router.set(id,sessions=new Set());
+    sessions.add(this);
     peer.on('message', (label, m) => this.message(label, m));
     peer.on('binary',(buffer,label)=>{
       if(label!=='state'||this.closed)return;
@@ -105,7 +127,7 @@ export class GameSession {
     if(m.tick!==this.lastPacketTick){
       this.lastPacketTick=m.tick;
       let backlog=0;try{backlog=this.peer.channels?.get('state')?.bufferedAmount()??0;}catch{this.peer.close('channel-state-send-failed');return;}
-      if(backlog>STATE_BACKLOG_BYTES||(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250)){this.skippedTick=m.tick;this.transportCounters.stateSkippedSnapshots++;}
+      if(backlog>STATE_BACKLOG_BYTES||(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>STATE_STALE_MS)){this.skippedTick=m.tick;this.transportCounters.stateSkippedSnapshots++;}
     }
     if(m.tick===this.skippedTick){this.transportCounters.stateDropped++;return;}
     // Once a snapshot is admitted, every datagram of it is attempted: a
@@ -117,7 +139,7 @@ export class GameSession {
   }
   close() {
     if(this.closed)return;this.closed=true;
-    this.world.off('message', this.listener);
+    const sessions=this.router?.get(this.id);sessions?.delete(this);if(sessions&&!sessions.size)this.router.delete(this.id);
     this.world.postMessage({ type: 'leave', client: this.id });
   }
 }

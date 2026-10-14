@@ -33,6 +33,25 @@ test('snapshot datagrams are unfragmented; a congested snapshot is skipped whole
 });
 
 function setup(){const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
+test('one world listener routes by client and recipients; closed sessions stop receiving',()=>{
+ const mkPeer=()=>{const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');return peer;};
+ const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);
+ const pa=mkPeer(),pb=mkPeer();
+ const a=new GameSession(pa,world,'alpha',{}),b=new GameSession(pb,world,'beta',{});
+ try{
+  assert.equal(world.listenerCount('message'),1,'sessions share one world listener, not one each');
+  world.emit('message',{type:'entityRegistry',client:'alpha',registry:{marker:1}});
+  assert.equal(pa.sent.length,1);assert.equal(pb.sent.length,0,'client-addressed messages reach only their session');
+  world.emit('message',{type:'inputAck',recipients:[{client:'beta',epoch:1,generation:1,dropped:0,serverTick:9,ack:9,ackTick:9}]});
+  assert.equal(pa.sent.length,1);assert.equal(pb.sent.length,1,'recipients batches merge and route per recipient');
+  assert.equal(pb.sent[0].m.ack,9);
+  world.emit('message',{type:'scores',players:[]});
+  assert.equal(pa.sent.length+pb.sent.length,2,'unaddressed world messages reach no session');
+  b.close();
+  world.emit('message',{type:'entityRegistry',client:'beta',registry:{marker:2}});
+  assert.equal(pb.sent.length,1,'a closed session receives nothing further');
+ }finally{a.close();b.close();}
+});
 test('a stale snapshot is skipped whole, never paced out late',()=>{
  const {world,session,peer}=setup();const buffer=Buffer.alloc(1000);buffer.writeUInt32LE(0x31534e42);let sends=0;
  peer.sendStatePacket=()=>{sends++;return true;};
