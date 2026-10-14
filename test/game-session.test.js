@@ -7,8 +7,8 @@ test('entity registry and welcome establish the session without a replica bootst
  const {peer,world,session}=setup();const registry={classes:[[1,'rep_inf_trooper']]};
  try {
   world.emit('message',{type:'entityRegistry',client:'player',registry});
-  world.emit('message',{type:'joined',client:'player',player:{unitId:7,generation:2,snapshotMode:'entity-v1'},tick:30});
-  assert.deepEqual(peer.sent,[{lane:'events',m:{type:'entity-registry',registry}},{lane:'events',m:{type:'welcome',unitId:7,generation:2,snapshotMode:'entity-v1',playerId:7,tick:30}}]);
+  world.emit('message',{type:'joined',client:'player',player:{unitId:7,generation:2,snapshotMode:'snapshot-delta-v1'},tick:30});
+  assert.deepEqual(peer.sent,[{lane:'events',m:{type:'entity-registry',registry}},{lane:'events',m:{type:'welcome',unitId:7,generation:2,snapshotMode:'snapshot-delta-v1',playerId:7,tick:30}}]);
   const count=world.sent.length;
   peer.emit('message','state',{type:'snapshot-ack',epoch:1,tick:30});
   peer.emit('message','state',{type:'snapshot-resync'});
@@ -16,31 +16,31 @@ test('entity registry and welcome establish the session without a replica bootst
  } finally {session.close();}
 });
 
-test('semantic packets are unfragmented and only native admission authorizes exact membership ACK',()=>{
- const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');let buffered=11001,accept=true,sends=0;
- peer.channels=new Map([['state',{bufferedAmount:()=>buffered}]]);peer.sendStatePacket=(frames,options)=>{assert.equal(frames.length,1);assert.equal(options.maxBuffered,11000);sends++;return accept;};
+test('snapshot datagrams are unfragmented; a congested snapshot is skipped whole with no host round-trip',()=>{
+ const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');let buffered=40000,accept=true,sends=0;
+ peer.channels=new Map([['state',{bufferedAmount:()=>buffered}]]);peer.sendStatePacket=(frames,options)=>{assert.equal(frames.length,1);assert.equal(options.maxBuffered,32768);sends++;return accept;};
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try {
-  assert(world.sent[0].entity);const buffer=Buffer.alloc(1100);buffer.writeUInt32LE(0x31454e42);const message={type:'entityPacket',client:'player',epoch:1,packetId:2,buffer};
-  world.emit('message',message);assert.equal(sends,0);assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',epoch:1,packetId:2},'a backlog drop refunds the offered bytes');
-  buffered=11000;accept=false;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',epoch:1,packetId:2},'a refused send refunds the offered bytes');
-  accept=true;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entitySent',client:'player',epoch:1,packetId:2,ownCorrection:false,tick:0});
-  peer.emit('message','state',{type:'entity-ack',epoch:1,packetId:2,client:'victim'});
-  assert(world.sent.some(m=>m.type==='entityAck'&&m.client==='player'&&m.packetId===2));
-  const n=world.sent.length;peer.emit('message','events',{type:'entity-ack',epoch:1,packetId:2});assert.equal(world.sent.length,n);
+  assert(world.sent[0].entity);const buffer=Buffer.alloc(1100);buffer.writeUInt32LE(0x31534e42);
+  const message=tick=>({type:'entityPacket',client:'player',epoch:1,tick,buffer});
+  world.emit('message',message(2));assert.equal(sends,0,'backlog over 32 KB skips the snapshot');
+  buffered=0;world.emit('message',message(2));assert.equal(sends,0,'the rest of a skipped snapshot is skipped too');
+  accept=false;world.emit('message',message(4));assert.equal(sends,1,'a refused send drops one datagram');
+  accept=true;world.emit('message',message(6));assert.equal(sends,2);
+  assert.equal(world.sent.length,1,'nothing about state delivery is reported back to the host');
+  assert.equal(session.transportDiagnostics().stateSkippedSnapshots,1);
  } finally {session.close();}
 });
 
-function setup(){const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
-test('pacer supersession and stale admission return exact offer identities to the host',()=>{
- const {world,session}=setup();const buffer=Buffer.alloc(1000);buffer.writeUInt32LE(0x31454e42);
- const packet=(packetId,ownCorrection=false)=>({type:'entityPacket',client:'player',epoch:1,packetId,ownCorrection,pacingBytesPerSecond:20000,buffer});
+function setup(){const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
+test('a stale snapshot is skipped whole, never paced out late',()=>{
+ const {world,session,peer}=setup();const buffer=Buffer.alloc(1000);buffer.writeUInt32LE(0x31534e42);let sends=0;
+ peer.sendStatePacket=()=>{sends++;return true;};
  try{
-  world.emit('message',packet(1));world.emit('message',packet(2,true));world.emit('message',packet(3,true));
-  assert.deepEqual(world.sent.filter(m=>m.type==='entityDropped'),[{type:'entityDropped',client:'player',epoch:1,packetId:2}]);
-  session.entityPacket({...packet(4),capturedAtUnixMs:Date.now()-1000},true);
-  assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',epoch:1,packetId:4});
-  session.close();assert.equal(world.sent.filter(m=>m.type==='entityDropped'&&m.packetId===3).length,1);
+  session.entityPacket({type:'entityPacket',client:'player',epoch:1,tick:4,capturedAtUnixMs:Date.now()-1000,buffer});
+  assert.equal(sends,0);assert.equal(session.transportDiagnostics().stateSkippedSnapshots,1);
+  session.entityPacket({type:'entityPacket',client:'player',epoch:1,tick:6,capturedAtUnixMs:Date.now(),buffer});
+  assert.equal(sends,1,'the next fresh snapshot goes out at once');
  }finally{session.close();}
 });
 test('legacy peers cannot construct a session',()=>{assert.throws(()=>new GameSession({remote:{protocol:1}},Object.assign(new EventEmitter(),{networkContract:CONTRACT}),'player',{}),/Update required/);});
@@ -69,15 +69,15 @@ test('a native state send close race cannot escape the worker listener or acknow
  const {Peer}=await import('../src/peer.js');const {peer,world,session}=setup();
  Object.setPrototypeOf(peer,Peer.prototype);delete peer.close;peer.authenticated=true;peer.pc={close(){}};
  peer.channels=new Map([['state',{isOpen:()=>true,bufferedAmount:()=>0,sendMessageBinary(){throw Error('errno=104');},close(){}}]]);
- const bytes=Buffer.alloc(30);bytes.writeUInt32LE(0x31454e42);
- assert.doesNotThrow(()=>world.emit('message',{type:'entityPacket',client:'player',epoch:1,packetId:5,buffer:bytes}));
+ const bytes=Buffer.alloc(30);bytes.writeUInt32LE(0x31534e42);
+ assert.doesNotThrow(()=>world.emit('message',{type:'entityPacket',client:'player',epoch:1,tick:5,buffer:bytes}));
  assert(peer.closed);assert(session.closed);assert(!world.sent.some(m=>m.type==='entitySent'));assert(world.sent.some(m=>m.type==='leave'));
 });
 
 test('a peer\'s offered name is cleaned and bounded before it reaches the roster',async()=>{
  const {playerName}=await import('../src/game-session.js');
  assert.equal(playerName(undefined),'Player');assert.equal(playerName('  Josh\x00 Lambert  '),'Josh Lambert');assert.equal(playerName('x'.repeat(50)).length,32);assert.equal(playerName('\t\n'),'Player');
- const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1',name:'  Josh  '};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');
+ const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1',name:'  Josh  '};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try{assert.equal(world.sent[0].name,'Josh');}finally{session.close();}
 });

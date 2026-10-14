@@ -43,7 +43,7 @@ test('a newer correction schema is accepted when the engine manifest and impleme
    'src/runtime/world-state.js':'export function worldState(){}',
    'src/runtime/content-hash.js':'export async function contentHash(){return "fixture"}',
    'src/runtime/network-entity-player.js':'export const OWN_PLAYER_SCHEMA=9;',
-   'src/runtime/entity-host.js':'export function createEntityHost(){}'
+   'src/runtime/snapshot-host.js':'export function createSnapshotHost(){}'
   };
   await Promise.all(Object.entries(modules).map(([name,body])=>writeFile(join(root,name),body)));
   worker=new Worker(new URL('../src/world-worker.js',import.meta.url),{workerData:{engine:root,data:root}});

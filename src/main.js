@@ -210,7 +210,6 @@ async function serve() {
         query,
         maxPlayers: config.maxPlayers ?? 64,
         armySize:32,
-        stateBytesPerSecond: config.stateBytesPerSecond,
         autoSpawn: config.autoSpawn === true,
         autoAssignTeams: config.autoAssignTeams === true,
         metrics:metricsEnabled,

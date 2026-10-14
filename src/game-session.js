@@ -1,6 +1,8 @@
 import { wireCompatibility } from './network-contract.js';
-import { StatePacer } from './state-pacer.js';
-export const STATE_BACKLOG_BYTES=11000;
+// A snapshot behind more than this is skipped whole; the SCTP packet
+// lifetime expires what is already queued, and the next snapshot is still
+// encoded against the client's acknowledged baseline.
+export const STATE_BACKLOG_BYTES=32768;
 // The name a peer offered in its hello, as the roster, the scores and chat
 // will show it: printable, trimmed, bounded; absent means the generic name.
 export function playerName(value) {
@@ -12,9 +14,9 @@ export class GameSession {
   constructor(peer, world, id, welcome, options={}) {
     this.peer=peer;this.world=world;this.id=id;this.closed=false;
     const wire=wireCompatibility(world.networkContract);
-    if(Object.entries(wire).some(([key,value])=>peer.remote?.[key]!==value)||typeof peer.sendBinary!=='function')throw Error('Update required: entity-state-v1 protocol 2');
-    this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0};
-    this.pacer=new StatePacer({send:m=>this.entityPacket(m,true),drop:m=>this.dropEntityPacket(m)});
+    if(Object.entries(wire).some(([key,value])=>peer.remote?.[key]!==value)||typeof peer.sendBinary!=='function')throw Error('Update required: snapshot-delta-v1 protocol 2');
+    this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,stateSkippedSnapshots:0};
+    this.skippedTick=-1;this.lastPacketTick=-1;
     this.listener = (m) => {
       const recipient = m.recipients?.find(value=>value.client===id);
       if (m.client !== id && !recipient) return;
@@ -24,6 +26,7 @@ export class GameSession {
       else if(m.type==='entityEdgeResults')this.edgeFeedback(m);
       else if(m.type==='entityRegistry')peer.send('events',{type:'entity-registry',registry:m.registry});
       else if(m.type==='entityPacket')this.entityPacket(m);
+      else if(m.type==='gameplayEvents')peer.send('events',{type:'gameplay-events',tick:m.tick,records:m.records.map(r=>({...r,payload:Buffer.from(r.payload).toString('base64')}))});
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
       else if(m.type==='inputAck')this.inputAck(m);
       else if (m.type === 'chat') peer.send('events', m);
@@ -34,7 +37,8 @@ export class GameSession {
     peer.on('message', (label, m) => this.message(label, m));
     peer.on('binary',(buffer,label)=>{
       if(label!=='state'||this.closed)return;
-      const bytes=Buffer.from(buffer);if(bytes.length>1100||bytes.length<16||bytes.readUInt32LE(0)!==0x31494e42)return peer.close('invalid-entity-input');
+      const bytes=Buffer.from(buffer);const magic=bytes.length>=4?bytes.readUInt32LE(0):0;
+      if(bytes.length>1100||!((magic===0x31494e42&&bytes.length>=16)||(magic===0x31414e42&&bytes.length===10)))return peer.close('invalid-entity-input');
       const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
       this.entityInputTimes.push(now-this.entityInputWindow);
       if(++this.entityInputCount>120){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
@@ -53,10 +57,6 @@ export class GameSession {
       if(label!=='state'||!Number.isSafeInteger(m.epoch)||!Number.isSafeInteger(m.generation)||!Array.isArray(m.ids)||m.ids.length>32||m.ids.some(id=>!Number.isSafeInteger(id)||id<1))return;
       const now=Date.now();if(now-(this.entityAckWindow??0)>=1000){this.entityAckWindow=now;this.entityAckCount=0;}if(++this.entityAckCount>120)return this.peer.close('entity-ack-flood');
       this.world.postMessage({type:'entityEdgeAck',client:this.id,epoch:m.epoch,generation:m.generation,ids:m.ids});
-    }else if(m.type==='entity-ack'){
-      if(label!=='state'||!Number.isSafeInteger(m.epoch)||m.epoch<1||!Number.isSafeInteger(m.packetId)||m.packetId<1)return;
-      const now=Date.now();if(now-(this.entityAckWindow??0)>=1000){this.entityAckWindow=now;this.entityAckCount=0;}if(++this.entityAckCount>120)return this.peer.close('entity-ack-flood');
-      this.world.postMessage({type:'entityAck',client:this.id,epoch:m.epoch,packetId:m.packetId});
     } else if (m.type === 'chat') {
       if (label !== 'events' || typeof m.text !== 'string' || m.text.length > 240) return;
       const now = Date.now();
@@ -92,30 +92,27 @@ export class GameSession {
     if(this.peer.send('state',{type:'entity-edge-results',...fields}))this.lastEdgeFeedback={key,at:now};
   }
   transportDiagnostics() {
-    return {...this.transportCounters,...this.pacer.metrics,stateQueued:this.pacer.bytes,stateBuffered:this.peer.channels?.get('state')?.bufferedAmount()??0};
+    return {...this.transportCounters,stateBuffered:this.peer.channels?.get('state')?.bufferedAmount()??0};
   }
-  dropEntityPacket(m){this.transportCounters.stateDropped++;this.world.postMessage({type:'entityDropped',client:this.id,epoch:m.epoch,packetId:m.packetId});}
-  entityPacket(m,paced=false) {
+  entityPacket(m) {
     if(this.closed)return;
-    if(!paced&&Number.isInteger(m.pacingBytesPerSecond)&&m.pacingBytesPerSecond>=20000&&m.pacingBytesPerSecond<=500000){this.pacer.offer(m);return;}
-    // The host refunds only this offer's charged bytes, once. A forced own
-    // correction may not have spent budget at all.
-    if(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250){this.dropEntityPacket(m);return;}
     const bytes=Buffer.from(m.buffer);
-    if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
-    // State is expendable: never queue it behind a congested channel. A few
-    // datagrams still in the transport's hands (an asynchronous send, one
-    // publication's burst) are not congestion and must not cost a refresh.
-    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>STATE_BACKLOG_BYTES){this.dropEntityPacket(m);return;} }
-    catch { this.peer.close('channel-state-send-failed');return; }
+    const magic=bytes.length>=4?bytes.readUInt32LE(0):0;
+    if(bytes.length>1100||bytes.length<20||(magic!==0x31534e42&&magic!==0x314f4e42))return this.peer.close('invalid-entity-packet');
+    // Whole snapshots are the unit of loss: a congested or stale snapshot
+    // is skipped entire (all its parts and its own datagram), never paced.
+    if(m.tick!==this.lastPacketTick){
+      this.lastPacketTick=m.tick;
+      let backlog=0;try{backlog=this.peer.channels?.get('state')?.bufferedAmount()??0;}catch{this.peer.close('channel-state-send-failed');return;}
+      if(backlog>STATE_BACKLOG_BYTES||(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250)){this.skippedTick=m.tick;this.transportCounters.stateSkippedSnapshots++;}
+    }
+    if(m.tick===this.skippedTick){this.transportCounters.stateDropped++;return;}
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:STATE_BACKLOG_BYTES})??this.peer.sendBinary(bytes,'state');
-    if(!accepted){this.dropEntityPacket(m);return;}
+    if(!accepted){this.transportCounters.stateDropped++;return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
-    this.world.postMessage({type:'entitySent',client:this.id,epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
   }
   close() {
     if(this.closed)return;this.closed=true;
-    this.pacer.close();
     this.world.off('message', this.listener);
     this.world.postMessage({ type: 'leave', client: this.id });
   }

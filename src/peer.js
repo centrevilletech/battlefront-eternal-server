@@ -85,7 +85,7 @@ export class Peer extends EventEmitter {
           this.channel(
             this.pc.createDataChannel(
               label,
-              label === "state" ? { unordered: true, maxRetransmits: 0 } : {},
+              label === "state" ? { unordered: true, maxPacketLifeTime: 50 } : {},
             ),
           );
       });
@@ -107,7 +107,7 @@ export class Peer extends EventEmitter {
     });
     ch.onMessage((raw) => {
       try {
-        if(typeof raw!=='string'&&label==='state'&&this.authenticated){const bytes=Buffer.from(raw),magic=this.initiator?0x31454e42:0x31494e42;if(bytes.length>1100||bytes.length<(this.initiator?30:16)||bytes.readUInt32LE(0)!==magic)throw Error('invalid entity message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
+        if(typeof raw!=='string'&&label==='state'&&this.authenticated){const bytes=Buffer.from(raw),magic=bytes.length>=4?bytes.readUInt32LE(0):0;const valid=this.initiator?((magic===0x31534e42||magic===0x314f4e42)&&bytes.length>=20):((magic===0x31494e42&&bytes.length>=16)||(magic===0x31414e42&&bytes.length===10));if(bytes.length>1100||!valid)throw Error('invalid entity message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
         if(typeof raw!=='string' && label==='bulk' && this.authenticated){const bytes=Buffer.from(raw);if(bytes.length>32768)throw Error('invalid binary message');this.lastTraffic=Date.now();this.emit('binary',bytes,label);return;}
         if (typeof raw !== "string" || Buffer.byteLength(raw) > 32768)
           throw Error("invalid message");

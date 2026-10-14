@@ -20,12 +20,12 @@ try {
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
   const { OWN_PLAYER_SCHEMA } = await import(pathToFileURL(resolve(root, 'src/runtime/network-entity-player.js')));
   if (OWN_PLAYER_SCHEMA !== networkContract.ownCorrectionSchema) throw Error('Engine own-player schema mismatch');
-  const { createEntityHost } = await import(pathToFileURL(resolve(root, 'src/runtime/entity-host.js')));
+  const { createSnapshotHost } = await import(pathToFileURL(resolve(root, 'src/runtime/snapshot-host.js')));
   const clients = new Map(); let timer = null, last = performance.now(), debt = 0;
   let entityHost=null;
   const ensureEntityHost=()=>{
     if(!entityHost){
-      entityHost=createEntityHost({game,world,stateBytesPerSecond:workerData.stateBytesPerSecond});
+      entityHost=createSnapshotHost({game,world});
       process.once('exit',()=>entityHost?.dispose());
     }
     return entityHost;
@@ -43,6 +43,7 @@ try {
       for(const ack of out.inputAcks)parentPort.postMessage({type:'inputAck',...ack});
       for(const result of out.edgeResults)parentPort.postMessage({type:'entityEdgeResults',...result});
       for(const diagnostic of out.diagnostics)parentPort.postMessage({type:'entityDiagnostics',...diagnostic});
+      for(const events of out.reliableEvents??[])parentPort.postMessage({type:'gameplayEvents',...events});
       for(const packet of out.packets)parentPort.postMessage({type:'entityPacket',...packet},[packet.buffer]);
       for(const fault of out.faults)parentPort.postMessage({type:'snapshotFault',client:fault.client,reason:'entity-prerequisite-failed:'+String(fault.error.message).slice(0,100)});
     }
@@ -82,7 +83,7 @@ try {
         await world.addPlayer(m.client, { spectator: m.spectator, name: typeof m.name === 'string' && m.name ? m.name.slice(0, 32) : 'Player', reliableFire:true, separateActions:true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
         clients.set(m.client, { started: false });
         entityHost.addClient(m.client);entityHost.setReady(m.client);parentPort.postMessage(entityRegistryMessage);
-        parentPort.postMessage({ type:'joined', client:m.client, player:{...world.player(m.client),snapshotMode:'entity-v1'}, tick:game.worldClock.tick });
+        parentPort.postMessage({ type:'joined', client:m.client, player:{...world.player(m.client),snapshotMode:'snapshot-delta-v1'}, tick:game.worldClock.tick });
         {const name=world.players.get(m.client)?.character?.name;if(name&&!m.spectator)notice(`${name} joined the game`,m.client);}
       } else if (m.type === 'leave') { report(); {const name=clients.has(m.client)?world.players.get(m.client)?.character?.name:null;if(name)notice(`${name} left the game`,m.client);} entityHost?.removeClient(m.client);clients.delete(m.client); world.removePlayer(m.client); }
       else if(m.type==='entityInput'){
@@ -90,9 +91,6 @@ try {
       }
       else if(m.type==='playerLink'){const actor=world.players.get(m.client);if(actor&&Number.isFinite(m.rtt))actor.link={rtt:m.rtt,path:m.path&&typeof m.path==='object'?{kind:String(m.path.kind||''),family:String(m.path.family||'')}:null};}
       else if(m.type==='entityEdgeAck'){entityHost?.edgeAck(m.client,m);}
-      else if(m.type==='entitySent'){if(m.epoch===1)entityHost?.admitted(m.client,m.packetId,{ownCorrection:m.ownCorrection,tick:m.tick});}
-      else if(m.type==='entityDropped'){if(m.epoch===1)entityHost?.dropped(m.client,m.packetId);}
-      else if(m.type==='entityAck'){entityHost?.ack(m.client,{epoch:m.epoch,packetId:m.packetId});}
       else if (m.type === 'announcement') notice(m.text);
       else if (m.type === 'chat') {
         const sender = world.player(m.client);
@@ -113,7 +111,7 @@ try {
         else if (m.method === 'worldState') result = { type: 'state', state: worldState(game) };
         else if (m.method === 'inspect') {
           const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
-          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, entityScheduling:entityHost?.inspect(m.client),inputDiagnostics:entityHost?.inputDiagnostics(m.client),players: clients.size, running: Boolean(timer) };
+          result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, snapshotHost:entityHost?.inspect(m.client),inputDiagnostics:entityHost?.inputDiagnostics(m.client),players: clients.size, running: Boolean(timer) };
         }
         parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {

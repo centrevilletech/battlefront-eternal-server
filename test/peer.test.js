@@ -86,23 +86,23 @@ test('native buffered sends are accepted once and complete state groups cross th
 
 test('semantic binary direction and initial bulk are authenticated and bounded',()=>{
  for(const initiator of [false,true]){
-  const peer=Object.assign(new EventEmitter(),{initiator,channels:new Map(),authenticated:true,lastSequence:0,capabilities:initiator?['entity-state-v1']:[],remote:{capabilities:['entity-state-v1']},close(){this.closed=true;}});Object.setPrototypeOf(peer,Peer.prototype);peer.close=()=>{peer.closed=true;};
+  const peer=Object.assign(new EventEmitter(),{initiator,channels:new Map(),authenticated:true,lastSequence:0,capabilities:initiator?['snapshot-delta-v1']:[],remote:{capabilities:['snapshot-delta-v1']},close(){this.closed=true;}});Object.setPrototypeOf(peer,Peer.prototype);peer.close=()=>{peer.closed=true;};
   let receive;const channel={getLabel:()=> 'state',onError(){},onClosed(){},onOpen(){},onMessage:fn=>{receive=fn;},isOpen:()=>true};Peer.prototype.channel.call(peer,channel);
-  let delivered=0;peer.on('binary',()=>delivered++);const bytes=Buffer.alloc(40);bytes.writeUInt32LE(initiator?0x31454e42:0x31494e42);receive(bytes);assert.equal(delivered,1);
-  bytes.writeUInt32LE(initiator?0x31494e42:0x31454e42);receive(bytes);assert(peer.closed);assert.equal(delivered,1);
+  let delivered=0;peer.on('binary',()=>delivered++);const bytes=Buffer.alloc(40);bytes.writeUInt32LE(initiator?0x31534e42:0x31494e42);receive(bytes);assert.equal(delivered,1);
+  bytes.writeUInt32LE(initiator?0x31494e42:0x31534e42);receive(bytes);assert(peer.closed);assert.equal(delivered,1);
   peer.closed=false;if(initiator){channel.getLabel=()=> 'bulk';Peer.prototype.channel.call(peer,channel);receive(Buffer.alloc(100));assert.equal(delivered,2);}
  }
 });
 
 test('old protocol receives an explicit version error before authentication',()=>{
- const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
+ const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
  assert.throws(()=>peer.handshake({type:'hello',nonce:'a'.repeat(64),publicKey:'b'.repeat(60),protocol:1,simulation:'bfe-sim-2'}),/Update required/);
  assert.equal(sent[0].type,'version-error');assert.match(sent[0].message,/protocol 2/);assert(!peer.authenticated);
 });
 
  test('previous correction schema revision is rejected before authentication',()=>{
- const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
- assert.throws(()=>peer.handshake({type:'hello',nonce:'a'.repeat(64),publicKey:'b'.repeat(60),protocol:2,simulation:'bfe-sim-3',profile:'entity-state-v1'}),/Update required/);
+ const sent=[];const peer=Object.create(Peer.prototype);peer.hello=()=>{};peer.compatibility={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.channels=new Map([['events',{sendMessage:m=>sent.push(JSON.parse(m))}]]);
+ assert.throws(()=>peer.handshake({type:'hello',nonce:'a'.repeat(64),publicKey:'b'.repeat(60),protocol:2,simulation:'bfe-sim-3',profile:'snapshot-delta-v1'}),/Update required/);
  assert.match(sent[0].message,/bfe-sim-5/);assert(!peer.authenticated);
  });
 test('native readiness and send close races isolate the affected peer without admitting state',()=>{

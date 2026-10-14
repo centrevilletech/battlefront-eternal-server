@@ -1,12 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
-// ABI 3 is implemented by this server adapter, not negotiated with clients.
+// ABI 4 is implemented by this server adapter, not negotiated with clients.
 export function validateNetworkContract(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Missing engine network contract');
   if (value.manifestVersion !== 1) throw Error('Unsupported engine network manifest version');
-  if (value.serverAdapterABI !== 3) throw Error('Unsupported engine server adapter ABI');
-  if (value.protocol !== 2 || value.profile !== 'entity-state-v1') throw Error('Unsupported engine transport contract');
+  if (value.serverAdapterABI !== 4) throw Error('Unsupported engine server adapter ABI');
+  if (value.protocol !== 2 || value.profile !== 'snapshot-delta-v1') throw Error('Unsupported engine transport contract');
   if (typeof value.simulation !== 'string' || !/^bfe-sim-[1-9][0-9]{0,5}$/.test(value.simulation)) throw Error('Invalid engine simulation revision');
   if (!Number.isInteger(value.ownCorrectionSchema) || value.ownCorrectionSchema < 1 || value.ownCorrectionSchema > 65535) throw Error('Invalid engine own correction schema');
   return Object.freeze(Object.fromEntries(['manifestVersion','protocol','profile','simulation','serverAdapterABI','ownCorrectionSchema'].map(key=>[key,value[key]])));
