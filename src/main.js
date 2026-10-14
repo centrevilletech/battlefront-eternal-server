@@ -8,6 +8,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { Worker } from "node:worker_threads";
 import http from "node:http";
+import { randomBytes } from "node:crypto";
 import { startLocalServer } from "./local-server.js";
 import { loadIdentity, keyId } from "./identity.js";
 import { loadCertificate } from "./certificate.js";
@@ -173,6 +174,7 @@ async function serve() {
   });
   server.listen(Number(process.env.PORT ?? 18450), "127.0.0.1");
   let rotationIndex = 0, rotating = false;
+  let matchToken = randomBytes(16).toString('hex');
   // A finished battle shows its end table for this long before the next map
   // loads; a restart asked by the host reloads the same map almost at once.
   const ROTATION_DELAY_MS = Number.isSafeInteger(config.rotationDelayMs) ? Math.min(60000, Math.max(300, config.rotationDelayMs)) : 10000, RESTART_DELAY_MS = 3000;
@@ -182,8 +184,9 @@ async function serve() {
     if (rotating || !world || status !== 'running') return false;
     rotating = true;
     if (advance) rotationIndex = (rotationIndex + 1) % config.rotation.length;
+    matchToken = randomBytes(16).toString('hex');
     const [nextMap, nextSide] = config.rotation[rotationIndex].replace(/^swbf1\//, '').split(':');
-    const match = { query: `?map=${nextMap}&side=${nextSide}&ai=classic&seed=1`, delayMs };
+    const match = { query: `?map=${nextMap}&side=${nextSide}&ai=classic&seed=1&match=${matchToken}`, delayMs };
     online?.match(match); local?.match(match);
     const current = world;
     rotationTimer = setTimeout(async () => {
@@ -199,7 +202,7 @@ async function serve() {
     const [map, side] = mission.replace(/^swbf1\//, "").split(":");
     if (mission.startsWith("swbf2/"))
       throw Error("BF2 simulation is not implemented");
-    const query = `?map=${map}&side=${side}&ai=classic&seed=1`;
+    const query = `?map=${map}&side=${side}&ai=classic&seed=1&match=${matchToken}`;
     world = new Worker(new URL("./world-worker.js", import.meta.url), {
       workerData: {
         engine: config.engine,

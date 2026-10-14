@@ -30,5 +30,8 @@ test('finished matches replace the world and advance the configured playlist', {
     assert.match(matches[0],/map=nab2&side=rep/);
     assert.match(matches[1],/map=bes2&side=all/);
     assert.match(matches[2],/map=nab2&side=rep/);
+    const tokens=matches.slice(0,3).map(query=>new URLSearchParams(query).get('match'));
+    for(const token of tokens)assert.match(token,/^[a-f0-9]{32}$/);
+    assert.equal(new Set(tokens).size,3,'returning to the same map still creates a distinct launch');
   } finally { if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited;}await rm(root,{recursive:true,force:true}); }
 });

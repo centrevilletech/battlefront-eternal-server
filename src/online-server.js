@@ -42,6 +42,14 @@ export class OnlineServer extends EventEmitter {
     if (!/^[a-f0-9]{64}$/.test(m.from) || typeof m.payload !== 'string') return;
     if (this.isBanned(m.from) || (this.config.honorGlobalBans && this.bans.contains(m.from))) return;
     const signal = JSON.parse(m.payload);
+    // Readiness uses the existing identity-authenticated signaling route.
+    // Answer only for this launched world, without allocating a game peer.
+    if (signal.matchProbe !== undefined) {
+      if (signal.type === 'candidate' && /^[a-f0-9]{32}$/.test(signal.matchProbe) && /^[a-f0-9]{32}$/.test(signal.nonce) &&
+          signal.matchProbe === new URLSearchParams(this.query).get('match'))
+        this.master.signal(m.from, { type: 'candidate', matchReady: signal.matchProbe, nonce: signal.nonce });
+      return;
+    }
     let peer = this.peers.get(m.from);
     if (!peer) {
       if (signal.type !== 'offer') {
