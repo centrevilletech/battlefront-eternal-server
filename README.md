@@ -18,9 +18,10 @@ and the diagnostic `/healthz` listener stays on loopback port 18450. The local
 signaling listener binds `::` with IPv4 dual-stack support; set `bind` and `gamePort` in config.json to
 change it. Clients verify Ed25519 identities bound to both DTLS fingerprints.
 Each connected player receives up to `stateBytesPerSecond` of entity state
-(default 100000, about 800 kbit/s; a full 32 versus 32 field refreshed at 20 Hz
-uses about 85 KB/s of it); lower it in config.json for a host with little
-upstream bandwidth, at the cost of less frequent updates for distant actors.
+(default 100000, about 800 kbit/s of server-to-client state payload). Lower
+it in config.json for a host with little upstream bandwidth, at the cost of
+less frequent updates for distant actors. The unified presentation records need
+fresh measurements; the earlier 85 KB/s full-field figure predates that path.
 Players join at the spawn screen and may pick their side; `autoAssignTeams: true`
 keeps the roster's assignment and `autoSpawn: true` puts a joining player on the
 field at once. A finished battle shows its end table for ten seconds
@@ -101,8 +102,12 @@ fired or hit anything. Independent input ACKs never imply discarded input execut
 
 The engine scheduler defaults to 100,000 bytes/second of state payload per
 connected client. Control traffic and network overhead are outside this budget,
-and own-player corrections have a starvation fallback. The 200 kbit/s goal is a
-future compact encoding target, not the current setting. Armies remain capped
+and own-player corrections have a starvation fallback. The client-upload target
+is 200 kbit/s, with up to 300 kbit/s available if measurements require it; this
+is independent of server state traffic, which consumes client download. Client
+download may use about 2 Mbit/s. Aldine currently allows 200,000 bytes/s of state
+payload per recipient; controls and transport overhead are additional. These are
+bandwidth planning targets, not enforced wire-rate caps. Armies remain capped
 at 32 per team (64 players total, replacing bots); 64 versus 64 is unsupported.
 Distance, closing speed, aim direction and a vehicle priority floor determine
 importance. Captured common records are shared across recipient schedulers.
