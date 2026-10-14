@@ -52,6 +52,31 @@ test('one world listener routes by client and recipients; closed sessions stop r
   assert.equal(pb.sent.length,1,'a closed session receives nothing further');
  }finally{a.close();b.close();}
 });
+test('a snapshot publication fans shared parts out to every listed session, parts before own',async()=>{
+ const flush=async()=>{for(let i=0;i<5;i++)await new Promise(r=>setImmediate(r));};
+ const mkPeer=()=>{const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.state=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=bytes=>{peer.state.push(Buffer.from(bytes).readUInt32LE(0));return true;};peer.close=()=>peer.emit('closed');return peer;};
+ const datagram=magic=>{const bytes=new Uint8Array(100);new DataView(bytes.buffer).setUint32(0,magic,true);return bytes.buffer;};
+ const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);
+ const pa=mkPeer(),pb=mkPeer();
+ const a=new GameSession(pa,world,'alpha',{}),b=new GameSession(pb,world,'beta',{});
+ try{
+  world.emit('message',{type:'snapshotPublication',
+   shared:[{tick:10,capturedAtUnixMs:Date.now(),clients:['alpha','beta','ghost'],parts:[datagram(0x31534e42)]}],
+   own:[{client:'alpha',tick:10,capturedAtUnixMs:Date.now(),buffer:datagram(0x314f4e42)}]});
+  assert.deepEqual(pa.state,[],'fan-out yields the thread instead of sending synchronously');
+  await flush();
+  assert.deepEqual(pa.state,[0x31534e42,0x314f4e42],'shared part reaches alpha before its own datagram');
+  assert.deepEqual(pb.state,[0x31534e42],'the same shared part reaches beta; an unknown client is ignored');
+  world.emit('message',{type:'snapshotPublication',
+   shared:[{tick:12,capturedAtUnixMs:Date.now()-1000,clients:['alpha','beta'],parts:[datagram(0x31534e42)]}],
+   own:[{client:'beta',tick:12,capturedAtUnixMs:Date.now()-1000,buffer:datagram(0x314f4e42)}]});
+  await flush();
+  assert.deepEqual(pa.state,[0x31534e42,0x314f4e42],'a stale publication is skipped whole through fan-out too');
+  assert.deepEqual(pb.state,[0x31534e42]);
+  assert.equal(a.transportDiagnostics().stateSkippedSnapshots,1);
+  assert.equal(b.transportDiagnostics().stateSkippedSnapshots,1);
+ }finally{a.close();b.close();}
+});
 test('a stale snapshot is skipped whole, never paced out late',()=>{
  const {world,session,peer}=setup();const buffer=Buffer.alloc(1000);buffer.writeUInt32LE(0x31534e42);let sends=0;
  peer.sendStatePacket=()=>{sends++;return true;};
@@ -83,7 +108,14 @@ test('new edge receipts and execution outcomes bypass identical-feedback retry t
   session.lastEdgeFeedback.at-=51;world.emit('message',{...message,results:[{id:1,status:'consumed',tick:5}]});assert.equal(peer.sent.length,3,'lost outcome/ACK must be retried');
  }finally{session.close();}
 });
-test('input flood guard retains its bound and emits bounded receipt timing diagnostics',()=>{const {peer,world,session}=setup();const oldWarn=console.warn,logs=[];console.warn=(...args)=>logs.push(args);try{const b=Buffer.alloc(16);b.writeUInt32LE(0x31494e42);for(let i=0;i<121;i++)peer.emit('binary',b,'state');assert(session.closed);assert.equal(world.sent.filter(m=>m.type==='entityInput').length,120);const value=JSON.parse(logs[0][1]);assert.equal(value.count,121);assert.equal(value.receiptOffsetsMs.length,121);assert(value.windowMs<1000);}finally{console.warn=oldWarn;session.close();}});
+test('input flood guard drops arrival bursts and closes only on a sustained flood',()=>{const {peer,world,session}=setup();const oldWarn=console.warn,logs=[];console.warn=(...args)=>logs.push(args);try{const b=Buffer.alloc(16);b.writeUInt32LE(0x31494e42);
+// A queue-drain burst: 121 arrivals inside one millisecond window are
+// dropped past the bound, not closed on (observed kicking load clients
+// after server hitches at 64 players).
+for(let i=0;i<121;i++)peer.emit('binary',b,'state');assert(!session.closed,'a burst does not close the peer');assert.equal(world.sent.filter(m=>m.type==='entityInput').length,120,'excess burst datagrams are dropped');
+// The same count sustained to the end of the window is a real flood.
+session.entityInputWindow=Date.now()-950;peer.emit('binary',b,'state');assert(session.closed,'a sustained flood closes the peer');
+const value=JSON.parse(logs[0][1]);assert.equal(value.count,122);assert.equal(value.receiptOffsetsMs.length,121);assert(value.windowMs>=900&&value.windowMs<1000);}finally{console.warn=oldWarn;session.close();}});
 test('a native state send close race cannot escape the worker listener or acknowledge delivery',async()=>{
  const {Peer}=await import('../src/peer.js');const {peer,world,session}=setup();
  Object.setPrototypeOf(peer,Peer.prototype);delete peer.close;peer.authenticated=true;peer.pc={close(){}};

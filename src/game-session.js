@@ -19,8 +19,31 @@ function routerFor(world){
   if(!router){
     router=new Map();
     world.setMaxListeners(Math.max(world.getMaxListeners(),256));
+    // Fan-out sends are drained in slices across macrotasks: expanding a
+    // 64-client publication in one synchronous burst (hundreds of native
+    // sends every 33 ms) starved RTC input callbacks on this thread,
+    // which then arrived as flood-like clumps while client acks lagged
+    // into empty-baseline encodes. Per-client parts-before-own order is
+    // preserved by the single FIFO queue; stale slices are dropped whole
+    // by entityPacket's capture-age rule.
+    const fanoutQueue=[];let fanoutAt=0,fanoutDraining=false;
+    const drainFanout=()=>{
+      let sent=0;
+      while(fanoutAt<fanoutQueue.length&&sent<32){const [session,packet]=fanoutQueue[fanoutAt++];session.entityPacket(packet);sent++;}
+      if(fanoutAt>=fanoutQueue.length){fanoutQueue.length=0;fanoutAt=0;fanoutDraining=false;}
+      else setImmediate(drainFanout);
+    };
+    const enqueueFanout=(session,packet)=>{fanoutQueue.push([session,packet]);if(!fanoutDraining){fanoutDraining=true;setImmediate(drainFanout);}};
     world.on('message',m=>{
-      if(m.recipients){for(const recipient of m.recipients){const sessions=router.get(recipient.client);if(sessions)for(const session of sessions)session.handleWorld({...m,...recipient});}}
+      if(m.type==='snapshotPublication'){
+        // The worker encoded and transferred each baseline group's parts
+        // once; expand them here, parts before each client's own
+        // datagram, through the same per-session skip rules. The shared
+        // buffers are only read (the peer copies per send), never mutated.
+        for(const group of m.shared??[])for(const client of group.clients){const sessions=router.get(client);if(sessions)for(const session of sessions)for(const part of group.parts)enqueueFanout(session,{tick:group.tick,capturedAtUnixMs:group.capturedAtUnixMs,buffer:part});}
+        for(const packet of m.own??[]){const sessions=router.get(packet.client);if(sessions)for(const session of sessions)enqueueFanout(session,packet);}
+      }
+      else if(m.recipients){for(const recipient of m.recipients){const sessions=router.get(recipient.client);if(sessions)for(const session of sessions)session.handleWorld({...m,...recipient});}}
       else if(m.client!=null){const sessions=router.get(m.client);if(sessions)for(const session of sessions)session.handleWorld(m);}
     });
     routers.set(world,router);
@@ -64,7 +87,15 @@ export class GameSession {
       if(bytes.length>1100||!((magic===0x31494e42&&bytes.length>=16)||(magic===0x31414e42&&bytes.length===10)))return peer.close('invalid-entity-input');
       const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
       this.entityInputTimes.push(now-this.entityInputWindow);
-      if(++this.entityInputCount>120){console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');}
+      // Arrival bursts are not sender floods: when this thread or the SCTP
+      // queue hitches, seconds of legitimately paced inputs land at once.
+      // Drop the excess datagrams (the next input supersedes held state)
+      // and only close on a rate sustained across most of a full window,
+      // which a queue drain cannot produce twice in a row.
+      if(++this.entityInputCount>120){
+        if(now-this.entityInputWindow<900)return;
+        console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');
+      }
       this.world.postMessage({type:'entityInput',client:this.id,buffer:bytes});
     });
     // Each measured round trip, with the selected path, for the roster the

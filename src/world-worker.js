@@ -47,9 +47,16 @@ try {
       if(out.edgeResults.length)parentPort.postMessage({type:'entityEdgeResults',recipients:out.edgeResults});
       for(const diagnostic of out.diagnostics)parentPort.postMessage({type:'entityDiagnostics',...diagnostic});
       for(const events of out.reliableEvents??[])parentPort.postMessage({type:'gameplayEvents',...events});
-      const byClient=new Map();
-      for(const packet of out.packets){let list=byClient.get(packet.client);if(!list)byClient.set(packet.client,list=[]);list.push(packet);}
-      for(const [client,packets] of byClient)parentPort.postMessage({type:'entityPackets',client,packets},packets.map(p=>p.buffer));
+      // One publication message: the shared entity parts cross to the main
+      // thread once per baseline group (not once per client) and are fanned
+      // out there; only the per-client own datagrams are individual.
+      const shared=out.shared??[],own=out.ownPackets??[];
+      if(shared.length||own.length){
+        const transfer=[];
+        for(const group of shared)transfer.push(...group.parts);
+        for(const packet of own)transfer.push(packet.buffer);
+        parentPort.postMessage({type:'snapshotPublication',shared,own},transfer);
+      }
       for(const fault of out.faults)parentPort.postMessage({type:'snapshotFault',client:fault.client,reason:'entity-prerequisite-failed:'+String(fault.error.message).slice(0,100)});
     }
     measure('encode',performance.now()-begun);
