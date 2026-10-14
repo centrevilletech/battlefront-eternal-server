@@ -44,10 +44,12 @@ export class OnlineServer extends EventEmitter {
     const signal = JSON.parse(m.payload);
     // Readiness uses the existing identity-authenticated signaling route.
     // Answer only for this launched world, without allocating a game peer.
-    if (signal.matchProbe !== undefined) {
-      if (signal.type === 'candidate' && /^[a-f0-9]{32}$/.test(signal.matchProbe) && /^[a-f0-9]{32}$/.test(signal.nonce) &&
+    if (m.type === 'matchProbe' || signal?.matchProbe !== undefined) {
+      if (signal && !Array.isArray(signal) && m.type === 'matchProbe' && signal.type === 'matchProbe' && Object.keys(signal).length === 3 &&
+          typeof signal.matchProbe === 'string' && typeof signal.nonce === 'string' &&
+          /^[a-f0-9]{32}$/.test(signal.matchProbe) && /^[a-f0-9]{32}$/.test(signal.nonce) &&
           signal.matchProbe === new URLSearchParams(this.query).get('match'))
-        this.master.signal(m.from, { type: 'candidate', matchReady: signal.matchProbe, nonce: signal.nonce });
+        this.master.signal(m.from, { type: 'matchReady', matchReady: signal.matchProbe, nonce: signal.nonce });
       return;
     }
     let peer = this.peers.get(m.from);
