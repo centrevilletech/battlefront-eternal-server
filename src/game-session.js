@@ -94,23 +94,22 @@ export class GameSession {
   transportDiagnostics() {
     return {...this.transportCounters,...this.pacer.metrics,stateQueued:this.pacer.bytes,stateBuffered:this.peer.channels?.get('state')?.bufferedAmount()??0};
   }
-  dropEntityPacket(m){this.transportCounters.stateDropped++;this.world.postMessage({type:'entityDropped',client:this.id,bytes:m.buffer.byteLength});}
+  dropEntityPacket(m){this.transportCounters.stateDropped++;this.world.postMessage({type:'entityDropped',client:this.id,epoch:m.epoch,packetId:m.packetId});}
   entityPacket(m,paced=false) {
     if(this.closed)return;
     if(!paced&&Number.isInteger(m.pacingBytesPerSecond)&&m.pacingBytesPerSecond>=20000&&m.pacingBytesPerSecond<=500000){this.pacer.offer(m);return;}
-    // The worker already charged these bytes to the per-client budget when
-    // it offered the packet; a drop here refunds them there.
-    const refund=(bytes)=>this.world.postMessage({type:'entityDropped',client:this.id,bytes});
-    if(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250){this.transportCounters.stateDropped++;refund(m.buffer.byteLength);return;}
+    // The host refunds only this offer's charged bytes, once. A forced own
+    // correction may not have spent budget at all.
+    if(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>250){this.dropEntityPacket(m);return;}
     const bytes=Buffer.from(m.buffer);
     if(bytes.length>1100||bytes.length<30||bytes.readUInt32LE(0)!==0x31454e42)return this.peer.close('invalid-entity-packet');
     // State is expendable: never queue it behind a congested channel. A few
     // datagrams still in the transport's hands (an asynchronous send, one
     // publication's burst) are not congestion and must not cost a refresh.
-    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>STATE_BACKLOG_BYTES){this.transportCounters.stateDropped++;refund(bytes.length);return;} }
+    try { if((this.peer.channels?.get('state')?.bufferedAmount()??0)>STATE_BACKLOG_BYTES){this.dropEntityPacket(m);return;} }
     catch { this.peer.close('channel-state-send-failed');return; }
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:STATE_BACKLOG_BYTES})??this.peer.sendBinary(bytes,'state');
-    if(!accepted){this.transportCounters.stateDropped++;refund(bytes.length);return;}
+    if(!accepted){this.dropEntityPacket(m);return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
     this.world.postMessage({type:'entitySent',client:this.id,epoch:m.epoch,packetId:m.packetId,ownCorrection:!!m.ownCorrection,tick:bytes.readUInt32LE(12)});
   }

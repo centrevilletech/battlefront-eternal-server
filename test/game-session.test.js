@@ -22,8 +22,8 @@ test('semantic packets are unfragmented and only native admission authorizes exa
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try {
   assert(world.sent[0].entity);const buffer=Buffer.alloc(1100);buffer.writeUInt32LE(0x31454e42);const message={type:'entityPacket',client:'player',epoch:1,packetId:2,buffer};
-  world.emit('message',message);assert.equal(sends,0);assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',bytes:1100},'a backlog drop refunds the offered bytes');
-  buffered=11000;accept=false;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',bytes:1100},'a refused send refunds the offered bytes');
+  world.emit('message',message);assert.equal(sends,0);assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',epoch:1,packetId:2},'a backlog drop refunds the offered bytes');
+  buffered=11000;accept=false;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',epoch:1,packetId:2},'a refused send refunds the offered bytes');
   accept=true;world.emit('message',message);assert.deepEqual(world.sent.at(-1),{type:'entitySent',client:'player',epoch:1,packetId:2,ownCorrection:false,tick:0});
   peer.emit('message','state',{type:'entity-ack',epoch:1,packetId:2,client:'victim'});
   assert(world.sent.some(m=>m.type==='entityAck'&&m.client==='player'&&m.packetId===2));
@@ -32,6 +32,17 @@ test('semantic packets are unfragmented and only native admission authorizes exa
 });
 
 function setup(){const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'entity-state-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
+test('pacer supersession and stale admission return exact offer identities to the host',()=>{
+ const {world,session}=setup();const buffer=Buffer.alloc(1000);buffer.writeUInt32LE(0x31454e42);
+ const packet=(packetId,ownCorrection=false)=>({type:'entityPacket',client:'player',epoch:1,packetId,ownCorrection,pacingBytesPerSecond:20000,buffer});
+ try{
+  world.emit('message',packet(1));world.emit('message',packet(2,true));world.emit('message',packet(3,true));
+  assert.deepEqual(world.sent.filter(m=>m.type==='entityDropped'),[{type:'entityDropped',client:'player',epoch:1,packetId:2}]);
+  session.entityPacket({...packet(4),capturedAtUnixMs:Date.now()-1000},true);
+  assert.deepEqual(world.sent.at(-1),{type:'entityDropped',client:'player',epoch:1,packetId:4});
+  session.close();assert.equal(world.sent.filter(m=>m.type==='entityDropped'&&m.packetId===3).length,1);
+ }finally{session.close();}
+});
 test('legacy peers cannot construct a session',()=>{assert.throws(()=>new GameSession({remote:{protocol:1}},Object.assign(new EventEmitter(),{networkContract:CONTRACT}),'player',{}),/Update required/);});
 test('fixed profile has no capability negotiation and rejects JSON gameplay',()=>{const {peer,world,session}=setup();try{assert.deepEqual(world.sent[0],{type:'join',client:'player',spectator:undefined,name:'Player',entity:true});peer.emit('message','state',{type:'inputs',commands:[]});assert(session.closed);}finally{session.close();}});
 test('compact input and edge ACKs bind authenticated identity',()=>{const {peer,world,session}=setup();try{const b=Buffer.alloc(16);b.writeUInt32LE(0x31494e42);peer.emit('binary',b,'state');assert.equal(world.sent.at(-1).type,'entityInput');assert.equal(world.sent.at(-1).client,'player');peer.emit('message','state',{type:'entity-edge-ack',epoch:1,generation:3,ids:[9],client:'victim'});assert.deepEqual(world.sent.at(-1),{type:'entityEdgeAck',client:'player',epoch:1,generation:3,ids:[9]});}finally{session.close();}});

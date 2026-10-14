@@ -91,7 +91,7 @@ try {
       else if(m.type==='playerLink'){const actor=world.players.get(m.client);if(actor&&Number.isFinite(m.rtt))actor.link={rtt:m.rtt,path:m.path&&typeof m.path==='object'?{kind:String(m.path.kind||''),family:String(m.path.family||'')}:null};}
       else if(m.type==='entityEdgeAck'){entityHost?.edgeAck(m.client,m);}
       else if(m.type==='entitySent'){if(m.epoch===1)entityHost?.admitted(m.client,m.packetId,{ownCorrection:m.ownCorrection,tick:m.tick});}
-      else if(m.type==='entityDropped'){entityHost?.dropped(m.client,m.bytes);}
+      else if(m.type==='entityDropped'){if(m.epoch===1)entityHost?.dropped(m.client,m.packetId);}
       else if(m.type==='entityAck'){entityHost?.ack(m.client,{epoch:m.epoch,packetId:m.packetId});}
       else if (m.type === 'announcement') notice(m.text);
       else if (m.type === 'chat') {

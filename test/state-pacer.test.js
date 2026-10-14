@@ -16,13 +16,16 @@ test('queue pressure refunds oldest remote offers and close cancels timers',()=>
  const {pacer,sent,dropped,advance}=fixture({maxBytes:2000});pacer.offer(packet(1));pacer.offer(packet(2));pacer.offer(packet(3,true));pacer.offer(packet(4));
  assert.deepEqual(dropped,[2]);assert.equal(pacer.bytes,2000);pacer.close();advance(100);
  assert.deepEqual(sent,[{id:1,at:0}]);assert.deepEqual(dropped,[2,3,4]);assert.equal(pacer.bytes,0);
+ assert.equal(pacer.metrics.pacedPressureDropped,1);assert.equal(pacer.metrics.pacedClosed,2);assert.equal(pacer.metrics.pacedDropped,3);
 });
 test('stalled pacing expires obsolete offers instead of admitting a catch-up burst',()=>{
  let time=0;const dropped=[],sent=[];const pacer=new StatePacer({now:()=>time,schedule:()=>1,cancel(){},send:m=>sent.push(m.packetId),drop:m=>dropped.push(m.packetId)});
  pacer.offer(packet(1));pacer.offer(packet(2));time=200;pacer.flush();assert.deepEqual(sent,[1]);assert.deepEqual(dropped,[2]);
  pacer.offer(packet(3));assert.deepEqual(sent,[1,3]);
+ assert.equal(pacer.metrics.pacedExpired,1);
 });
 test('new own correction replaces an unsent older correction and refunds its complete offer',()=>{
  const {pacer,sent,dropped,advance}=fixture();pacer.offer(packet(1));pacer.offer(packet(2,true));pacer.offer(packet(3));pacer.offer(packet(4,true));
  assert.deepEqual(dropped,[2]);advance(20);assert.deepEqual(sent.map(value=>value.id),[1,4,3]);
+ assert.equal(pacer.metrics.pacedSuperseded,1);
 });

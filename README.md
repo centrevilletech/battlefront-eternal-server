@@ -81,13 +81,17 @@ Dedicated hosts default to native RTC and use UDP when allocating their own TURN
 
 All online, LAN and desktop HOST sessions require the one contract exported by
 `src/runtime/network-contract.js` in the mounted engine. The current engine uses
-protocol 2, `bfe-sim-17`, profile `entity-state-v1`, correction schema 10 and
-server adapter ABI 2. Missing or incompatible manifests fail startup before
+protocol 2, `bfe-sim-19`, profile `entity-state-v1`, correction schema 11 and
+server adapter ABI 3. Missing or incompatible manifests fail startup before
 advertising gameplay readiness. Older clients receive an update-required error;
 there is no capability negotiation or legacy gameplay fallback.
 
-ABI 2 removes the replica bootstrap and delegates joins and ongoing publication
+ABI 2 removed the replica bootstrap and delegates joins and ongoing publication
 to the engine-owned entity host. Deploy this adapter with the matching engine.
+ABI 3 identifies dropped offers by epoch and packet ID rather than reporting
+only a byte count. The host releases pending membership and refunds only the
+charged bytes once; forced uncharged corrections cannot create refund credit.
+This requires a paired engine/adapter deployment, with unchanged client wire.
 The BNI1/BNE1 envelopes retain their 1100-byte limit and 30-byte state header.
 State uses independent absolute entity messages on an unordered channel. Each
 native admission receipt authorizes only that packet's membership ACK. Missing
@@ -105,7 +109,7 @@ connected client. Control traffic and network overhead are outside this budget,
 and own-player corrections have a starvation fallback. The client-upload target
 is 200 kbit/s, with up to 300 kbit/s available if measurements require it; this
 is independent of server state traffic, which consumes client download. Client
-download may use about 2 Mbit/s. Aldine currently allows 200,000 bytes/s of state
+download may use about 2 Mbit/s. Aldine currently allows 100,000 bytes/s of state
 payload per recipient; controls and transport overhead are additional. These are
 bandwidth planning targets, not enforced wire-rate caps. Armies remain capped
 at 32 per team (64 players total, replacing bots); 64 versus 64 is unsupported.
