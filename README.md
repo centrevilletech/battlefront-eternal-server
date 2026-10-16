@@ -2,21 +2,30 @@
 
 GPL-3.0-only headless authoritative multiplayer server. It runs the shared game
 simulation with independent human controllers, bots and per-player entity state over
-authenticated encrypted WebRTC channels. This is a development build.
+the engine's authenticated, encrypted native UDP transport (protocol 3, BFE-UDP/1).
+This is a development build.
 
 Run `npm ci && npm test`, then `node src/main.js` for the local setup menu and
 `npm start` for the service. Configure an engine checkout and operator-owned
 imported game data with the menu or `BFE_ENGINE_DIR` and `BFE_DATA_DIR`.
-Set `BFE_STATE_DIR` to keep configuration, identity and the persistent DTLS
-certificate in your chosen directory. Node 22.13 or later and OpenSSL are required.
-The engine must include `src/runtime/multiplayer-world.js`.
+Set `BFE_STATE_DIR` to keep configuration and identity in your chosen directory.
+Node 22.13 or later is required; no native module or OpenSSL binary is. The engine
+must include `src/runtime/multiplayer-world.js` and the transport in `src/net/`:
+the server imports the wire protocol from the mounted engine, as it does the
+simulation, so both always speak the same revision.
 Retail data is never downloaded or included in this repository or its image.
 
 LAN hosting works without accepting the online notice or contacting a master.
-UDP discovery uses port 18452, HTTP `/info` and WebSocket `/signal` use port 18451,
-and the diagnostic `/healthz` listener stays on loopback port 18450. The local
-signaling listener binds `::` with IPv4 dual-stack support; set `bind` and `gamePort` in config.json to
-change it. Clients verify Ed25519 identities bound to both DTLS fingerprints.
+Gameplay uses UDP 18451 (the game port, IPv4 and IPv6 sockets), HTTP `/info`
+uses TCP 18451, LAN discovery UDP 18452, and the diagnostic `/healthz` listener
+stays on loopback port 18450. Open UDP and TCP 18451 for players outside the LAN.
+Set `bind` and `gamePort` in config.json to change them. The game port is bound
+once for the life of the service; map rotations keep it. The transport handshake
+proves both Ed25519 identities and refuses an incompatible client with an
+update-required reason before it joins. One network (an IPv4 address or an IPv6
+/64; loopback exempt) may hold `maxPlayersPerAddress` sessions (default 8), since
+player identities cost nothing to create; raise it for a large LAN party behind
+one NAT joining an online server.
 Each connected player receives up to `stateBytesPerSecond` of entity state
 (default 100000, about 800 kbit/s of server-to-client state payload). Lower
 it in config.json for a host with little upstream bandwidth, at the cost of
@@ -28,13 +37,20 @@ field at once. A finished battle shows its end table for ten seconds
 (`rotationDelayMs`) before the next map loads. The operator menu (and the desktop HOST) can restart the match.
 
 Accepting the online notice enables directory registration, 20-second
-heartbeats and master WebSocket rendezvous. `relayPolicy` accepts `auto`, `never`
-or `always`; always excludes direct ICE candidates. TURN credentials are short
-lived. Server identity and DTLS certificate persist across restarts. With
+heartbeats and master WebSocket rendezvous. Rendezvous exchanges UDP candidates:
+the server answers with its public and reflexive (STUN) game-port addresses
+(private ones only to a player behind the server's own NAT), punches toward the
+player's public addresses, and the player connects to whichever answers first.
+`relayPolicy` accepts `auto`, `never` or `always`. With `auto` a server behind NAT,
+and with `always` every online player, gets a per-player TURN UDP relay on the
+master's relay; `always` advertises no direct address. At most `maxPlayers` + 8
+relays exist at once, and a relay whose player has not joined within 30 seconds is
+released. TURN credentials are short lived. Server identity persists across restarts. With
 `honorGlobalBans` enabled the server verifies signed expiring ban lists, pins the
 master signing key on first use and refreshes the list every two minutes.
 
-Input commands and independent entity records use an unordered channel. The
+Input commands and snapshot datagrams use the unreliable `state` lane; registry,
+welcome, gameplay events and chat use the ordered reliable `events` lane. The
 simulation runs at 60 Hz. The engine's shared entity host schedules remote
 updates at nominal 20 Hz, with additional own-player corrections. A reliable
 registry identifies classes, weapons and posts; entity records establish both
@@ -44,8 +60,8 @@ The server owns authentication, transport, administration and the worker loop.
 
 A Dockerfile, Compose example and systemd unit are included. Mount the engine
 and imported data read-only and persist `/data`. A Linux Docker host should use
-host networking for LAN discovery and ICE. No GPU, Electron, DOM or WebGL is
-required by the server.
+host networking for LAN discovery and to keep players' source addresses. No GPU,
+Electron, DOM or WebGL is required by the server.
 
 The Compose example and Aldine production deployment allocate two CPU cores and
 1 GiB of memory to the game server. CI enforces that production budget while
@@ -70,19 +86,18 @@ Remaining release gates include Steam acquisition, signed installers/updates, ve
 qualification, and full-match testing under latency, packet loss and cellular
 networks. Do not treat workstation relay tests as Starlink or load qualification.
 
-Transport dependencies retain their licenses: node-datachannel/libdatachannel
-(MPL-2.0), ws (MIT), and werift (MIT). The portable WebRTC backend is used for
-TURN/TCP and TLS because the distributed native libjuice build did not complete
-TURN/TCP in deployment testing.
-
-Local capacity testing uses `node --max-old-space-size=6144 scripts/load-peers.mjs --players=64 --seconds=60`. Supported sizes are 1, 8, 32, and 64. It starts an actual private headless world and native server RTC connections, with client traffic in separate processes (one per eight clients). Every eighth client uses the portable backend. No public server or relay is used. The harness caps combined RSS at 8 GiB and reports tick/encoding/compression latency, RTT, receive age, input acknowledgment lag, transport backlog, bandwidth, and server CPU. Use `--loss=0 --latency=0 --jitter=0` for a clean baseline. Defaults apply 5% input loss and 50–100 ms one-way delay; reliable bulk messages receive a synthetic 200 ms retry delay on 5% of sends. These application delays are **not** a measurement of actual SCTP retransmission under kernel packet loss. Run without browsers or other CPU-heavy tasks for capacity qualification.
-
-Dedicated hosts default to native RTC and use UDP when allocating their own TURN relay. Remote clients can still reach that allocation through their own TCP or TLS relay connection. `BFE_PORTABLE_RTC=1` or configuration `portableRTC: true` selects the portable backend for desktop packaging or hosts requiring TCP/TLS-only egress. `node scripts/relay-smoke.mjs --mixed` checks native-host interoperability with portable TCP/TLS clients using the configured public connectivity infrastructure.
+The only runtime dependency is ws (MIT), for master rendezvous. The WebRTC stack
+(node-datachannel, werift and its patch), the DTLS certificate and the RTC load
+and smoke scripts are retired with protocol 2. Load and impairment testing uses
+the engine's `tools/net-probe.mjs` (real world worker, `UdpPeer`, `GameSession` and
+production clients over the native transport, with optional kernel shaping).
+`BFE_ENGINE_DIR=<engine> npm test` also runs the real-transport integration test,
+which is skipped without an engine checkout.
 
 All online, LAN and desktop HOST sessions require the one contract exported by
 `src/runtime/network-contract.js` in the mounted engine. The current engine uses
-protocol 2, `bfe-sim-19`, profile `entity-state-v1`, correction schema 11 and
-server adapter ABI 3. Missing or incompatible manifests fail startup before
+protocol 3 (native UDP), the engine's current simulation revision, profile
+`snapshot-delta-v1` and server adapter ABI 4. Missing or incompatible manifests fail startup before
 advertising gameplay readiness. Older clients receive an update-required error;
 there is no capability negotiation or legacy gameplay fallback.
 

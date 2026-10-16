@@ -20,6 +20,11 @@ test('finished matches replace the world and advance the configured playlist', {
   await writeFile(join(engine,'src/runtime/network-entity-player.js'),'export const OWN_PLAYER_SCHEMA=8;');
   await writeFile(join(engine,'src/runtime/snapshot-host.js'),'export function createSnapshotHost(){}');
   await writeFile(join(engine,'src/runtime/network-contract.js'),'export const NETWORK_CONTRACT='+JSON.stringify(CONTRACT)+';');
+  // The engine's native UDP transport, reduced to the endpoint shape bfeserver binds.
+  await mkdir(join(engine,'src/net'),{recursive:true});
+  await writeFile(join(engine,'src/net/endpoint.js'),"import {EventEmitter} from 'node:events';export class UdpEndpoint extends EventEmitter{async listen(){return {port:40000,families:['IPv4']}}stats(){return {}}close(){}}");
+  await writeFile(join(engine,'src/net/crypto.js'),'export const identityKeys=keys=>keys;');
+  await writeFile(join(engine,'src/net/connection.js'),'export const CLOSE_CODE={NORMAL:0,REJECTED:4,VERSION:3,KICKED:5,SHUTDOWN:6};');
   await writeFile(join(state,'config.json'),JSON.stringify({engine,data,rotation:['swbf1/nab2:rep:conquest','swbf1/bes2:all:conquest'],gamePort:0,discovery:false,rotationDelayMs:300}));
   const child=spawn(process.execPath,['src/main.js','--serve'],{cwd:new URL('..',import.meta.url),env:{...process.env,BFE_STATE_DIR:state,PORT:'0'},stdio:['ignore','pipe','pipe']});
   let output=''; child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);

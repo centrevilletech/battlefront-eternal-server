@@ -10,8 +10,8 @@ import { Worker } from "node:worker_threads";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { startLocalServer } from "./local-server.js";
-import { loadIdentity, keyId } from "./identity.js";
-import { loadCertificate } from "./certificate.js";
+import { loadIdentity, keyId, fingerprint } from "./identity.js";
+import { startUdpServer } from "./udp-server.js";
 import { OperatorStore, operatorHandler, operatorRequest } from "./operator.js";
 import { OnlineServer } from "./online-server.js";
 const directory = resolve(
@@ -119,7 +119,7 @@ async function adminMenu(io) {
   if(request)try{console.log(JSON.stringify(await operatorRequest(directory,request),null,2));}catch(e){console.error('Administration:',e.message);}
 }
 async function serve() {
-  let online = null, local = null, stopping = false, rotationTimer = null;
+  let online = null, local = null, udp = null, stopping = false, rotationTimer = null;
   const startedAt = Date.now();
   let world = null,
     status = "setup",
@@ -128,7 +128,7 @@ async function serve() {
   const operator = new OperatorStore(directory);
   const metricsEnabled=process.env.BFE_WORLD_METRICS==='1';let metricsBusy=false;
   const admin = operatorHandler(directory, async command => {
-    if(command.action==='status')return {status,tick,pid:process.pid,startedAt,bans:operator.bans(),players:[...new Set([...(local?.players()??[]),...(online?.players()??[])])]};
+    if(command.action==='status')return {status,tick,pid:process.pid,startedAt,bans:operator.bans(),players:local?.players()??[],transport:udp?.stats()??null};
     if(command.action==='stop'){setTimeout(()=>shutdown(),50);return {ok:true};}
     if(command.action==='restart'){if(!rotate(false,RESTART_DELAY_MS))throw Error('No running match to restart');operator.audit('restart',null,'');return {ok:true};}
     if(command.action==='stats')return {players:operator.stats(command.id)};
@@ -226,11 +226,16 @@ async function serve() {
         const activeConfig = { ...config, rotation:[...config.rotation.slice(rotationIndex), ...config.rotation.slice(0,rotationIndex)] };
         world.postMessage({ type: "start" });
         const keys = loadIdentity(join(directory, 'identity.json'));
-        try { local = await startLocalServer({ config:activeConfig, directory, world, query, isBanned:id=>operator.banned(id), identity: { keys, id:keyId(keys.publicKey) }, certificate:loadCertificate(directory) }); }
+        // One native UDP endpoint for the life of the service: rotations keep
+        // its port, and LAN, JOIN IP, online and HOST players all use it.
+        try { udp ??= await startUdpServer({ engine: config.engine, keys, port: config.gamePort ?? 18451, host: config.bind ?? null, maxSessions: Math.max(32, (config.maxPlayers ?? 64) * 2 + 32), maxPerAddress: config.maxPlayersPerAddress ?? 8 }); }
+        catch(e) { status="fault"; error='Game port: '+e.message; console.error('UDP game port:',e.message); return; }
+        const isBanned = id => operator.banned(id) || Boolean(online?.globallyBanned(id));
+        try { local = await startLocalServer({ config:activeConfig, directory, world, query, udp, isBanned, identity: { keys, id:keyId(keys.publicKey), fingerprint:fingerprint(keys) } }); }
         catch(e) { error=e.message; console.error('LAN listener:',e.message); }
         if (config.onlineNoticeAccepted) {
           try {
-            online = new OnlineServer({ config:activeConfig, directory, world, query, isBanned:id=>operator.banned(id) });
+            online = new OnlineServer({ config:activeConfig, directory, world, query, udp, isBanned:id=>operator.banned(id) });
             online.on('fault', message => console.error('Online:', message));
             await online.start(); console.log('Online server identity:', online.id);
           } catch (e) { error = e.message; console.error('Online registration:', e.message); }
@@ -254,7 +259,7 @@ async function serve() {
   console.log("bfeserver service started; control menu: bfeserver");
   async function shutdown() {
     if(stopping)return; stopping=true;clearTimeout(rotationTimer);
-    await online?.close(); await local?.close(); await world?.terminate();
+    await online?.close(); await local?.close(); await udp?.close(); await world?.terminate();
     server.close(() => {operator.close();process.exit(0);});
   }
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal,shutdown);

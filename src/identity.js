@@ -9,6 +9,9 @@ import {
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 export const keyId = (key) => createHash("sha256").update(key).digest("hex");
+// The listing's transport fingerprint: SHA-256 of the identity key the UDP
+// handshake proves, in the colon-hex form the master already validates.
+export const fingerprint = (keys) => "sha-256 " + createHash("sha256").update(Buffer.from(keys.publicKey, "base64")).digest("hex").toUpperCase().match(/../g).join(":");
 export function loadIdentity(file) {
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8"));
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });

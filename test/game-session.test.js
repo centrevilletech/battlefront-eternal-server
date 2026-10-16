@@ -17,7 +17,7 @@ test('entity registry and welcome establish the session without a replica bootst
 });
 
 test('snapshot datagrams are unfragmented; a congested snapshot is skipped whole with no host round-trip',()=>{
- const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');let buffered=40000,accept=true,sends=0;
+ const peer=new EventEmitter();peer.remote={protocol:3,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');let buffered=40000,accept=true,sends=0;
  peer.channels=new Map([['state',{bufferedAmount:()=>buffered}]]);peer.sendStatePacket=(frames,options)=>{assert.equal(frames.length,1);assert.equal(options.maxBuffered,Number.MAX_SAFE_INTEGER);sends++;return accept;};
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try {
@@ -32,9 +32,9 @@ test('snapshot datagrams are unfragmented; a congested snapshot is skipped whole
  } finally {session.close();}
 });
 
-function setup(){const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
+function setup(){const peer=new EventEmitter();peer.remote={protocol:3,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});return {peer,world,session};}
 test('one world listener routes by client and recipients; closed sessions stop receiving',()=>{
- const mkPeer=()=>{const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');return peer;};
+ const mkPeer=()=>{const peer=new EventEmitter();peer.remote={protocol:3,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');return peer;};
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);
  const pa=mkPeer(),pb=mkPeer();
  const a=new GameSession(pa,world,'alpha',{}),b=new GameSession(pb,world,'beta',{});
@@ -54,7 +54,7 @@ test('one world listener routes by client and recipients; closed sessions stop r
 });
 test('a snapshot publication fans shared parts out to every listed session, parts before own',async()=>{
  const flush=async()=>{for(let i=0;i<5;i++)await new Promise(r=>setImmediate(r));};
- const mkPeer=()=>{const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.state=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=bytes=>{peer.state.push(Buffer.from(bytes).readUInt32LE(0));return true;};peer.close=()=>peer.emit('closed');return peer;};
+ const mkPeer=()=>{const peer=new EventEmitter();peer.remote={protocol:3,simulation:'bfe-sim-5',profile:'snapshot-delta-v1'};peer.sent=[];peer.state=[];peer.send=(lane,m)=>{peer.sent.push({lane,m});return true;};peer.sendBinary=bytes=>{peer.state.push(Buffer.from(bytes).readUInt32LE(0));return true;};peer.close=()=>peer.emit('closed');return peer;};
  const datagram=magic=>{const bytes=new Uint8Array(100);new DataView(bytes.buffer).setUint32(0,magic,true);return bytes.buffer;};
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);
  const pa=mkPeer(),pb=mkPeer();
@@ -116,19 +116,21 @@ for(let i=0;i<121;i++)peer.emit('binary',b,'state');assert(!session.closed,'a bu
 // The same count sustained to the end of the window is a real flood.
 session.entityInputWindow=Date.now()-950;peer.emit('binary',b,'state');assert(session.closed,'a sustained flood closes the peer');
 const value=JSON.parse(logs[0][1]);assert.equal(value.count,122);assert.equal(value.receiptOffsetsMs.length,121);assert(value.windowMs>=900&&value.windowMs<1000);}finally{console.warn=oldWarn;session.close();}});
-test('a native state send close race cannot escape the worker listener or acknowledge delivery',async()=>{
- const {Peer}=await import('../src/peer.js');const {peer,world,session}=setup();
- Object.setPrototypeOf(peer,Peer.prototype);delete peer.close;peer.authenticated=true;peer.pc={close(){}};
- peer.channels=new Map([['state',{isOpen:()=>true,bufferedAmount:()=>0,sendMessageBinary(){throw Error('errno=104');},close(){}}]]);
+test('a closed UDP peer refuses state without escaping the worker listener',async()=>{
+ const {UdpPeer}=await import('../src/udp-peer.js');const {world}=setup();
+ const transport=Object.assign(new EventEmitter(),{id:'player',hello:{protocol:3,simulation:'bfe-sim-5',profile:'snapshot-delta-v1',content:'c'},rtt:5,connection:{path:null},
+  send(){return true;},close(code,reason){this.emit('close',{code,reason,remote:false});},stats:()=>({})});
+ const peer=new UdpPeer(transport,{contract:CONTRACT,content:'c',closeCodes:{}});const session=new GameSession(peer,world,'udp-player',{});
+ transport.emit('close',{code:1,reason:'idle timeout',remote:false});
  const bytes=Buffer.alloc(30);bytes.writeUInt32LE(0x31534e42);
- assert.doesNotThrow(()=>world.emit('message',{type:'entityPacket',client:'player',epoch:1,tick:5,buffer:bytes}));
- assert(peer.closed);assert(session.closed);assert(!world.sent.some(m=>m.type==='entitySent'));assert(world.sent.some(m=>m.type==='leave'));
+ assert.doesNotThrow(()=>world.emit('message',{type:'entityPacket',client:'udp-player',epoch:1,tick:5,buffer:bytes}));
+ assert(peer.closed);assert(session.closed);assert(world.sent.some(m=>m.type==='leave'));
 });
 
 test('a peer\'s offered name is cleaned and bounded before it reaches the roster',async()=>{
  const {playerName}=await import('../src/game-session.js');
  assert.equal(playerName(undefined),'Player');assert.equal(playerName('  Josh\x00 Lambert  '),'Josh Lambert');assert.equal(playerName('x'.repeat(50)).length,32);assert.equal(playerName('\t\n'),'Player');
- const peer=new EventEmitter();peer.remote={protocol:2,simulation:'bfe-sim-5',profile:'snapshot-delta-v1',name:'  Josh  '};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');
+ const peer=new EventEmitter();peer.remote={protocol:3,simulation:'bfe-sim-5',profile:'snapshot-delta-v1',name:'  Josh  '};peer.send=()=>true;peer.sendBinary=()=>true;peer.close=()=>peer.emit('closed');
  const world=new EventEmitter();world.networkContract=CONTRACT;world.sent=[];world.postMessage=m=>world.sent.push(m);const session=new GameSession(peer,world,'player',{});
  try{assert.equal(world.sent[0].name,'Josh');}finally{session.close();}
 });

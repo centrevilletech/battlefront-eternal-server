@@ -6,7 +6,8 @@ export function validateNetworkContract(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Missing engine network contract');
   if (value.manifestVersion !== 1) throw Error('Unsupported engine network manifest version');
   if (value.serverAdapterABI !== 4) throw Error('Unsupported engine server adapter ABI');
-  if (value.protocol !== 2 || value.profile !== 'snapshot-delta-v1') throw Error('Unsupported engine transport contract');
+  // Protocol 3 is the native UDP transport (the engine's src/net, BFE-UDP/1).
+  if (value.protocol !== 3 || value.profile !== 'snapshot-delta-v1') throw Error('Unsupported engine transport contract');
   if (typeof value.simulation !== 'string' || !/^bfe-sim-[1-9][0-9]{0,5}$/.test(value.simulation)) throw Error('Invalid engine simulation revision');
   if (!Number.isInteger(value.ownCorrectionSchema) || value.ownCorrectionSchema < 1 || value.ownCorrectionSchema > 65535) throw Error('Invalid engine own correction schema');
   return Object.freeze(Object.fromEntries(['manifestVersion','protocol','profile','simulation','serverAdapterABI','ownCorrectionSchema'].map(key=>[key,value[key]])));

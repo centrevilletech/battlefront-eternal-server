@@ -1,7 +1,7 @@
 import { wireCompatibility } from './network-contract.js';
-// A snapshot behind more than this is skipped whole; the SCTP packet
-// lifetime expires what is already queued, and the next snapshot is still
-// encoded against the client's acknowledged baseline.
+// A snapshot behind more than this is skipped whole, and the next snapshot
+// is still encoded against the client's acknowledged baseline. The native
+// UDP peer reports its socket queue plus a congestion hint (udp-peer.js).
 export const STATE_BACKLOG_BYTES=32768;
 // A snapshot captured more than this long ago is skipped whole at forward
 // time: three publication intervals of queue is already visible lag, and
@@ -61,7 +61,7 @@ export class GameSession {
   constructor(peer, world, id, welcome, options={}) {
     this.peer=peer;this.world=world;this.id=id;this.closed=false;
     const wire=wireCompatibility(world.networkContract);
-    if(Object.entries(wire).some(([key,value])=>peer.remote?.[key]!==value)||typeof peer.sendBinary!=='function')throw Error('Update required: snapshot-delta-v1 protocol 2');
+    if(Object.entries(wire).some(([key,value])=>peer.remote?.[key]!==value)||typeof peer.sendBinary!=='function')throw Error(`Update required: ${wire.profile} protocol ${wire.protocol}`);
     this.transportCounters={stateGroups:0,stateBytes:0,stateDropped:0,stateSkippedSnapshots:0};
     this.skippedTick=-1;this.lastPacketTick=-1;
     this.handleWorld = (m) => {
@@ -87,8 +87,8 @@ export class GameSession {
       if(bytes.length>1100||!((magic===0x31494e42&&bytes.length>=16)||(magic===0x31414e42&&bytes.length===10)))return peer.close('invalid-entity-input');
       const now=Date.now();if(now-(this.entityInputWindow??0)>=1000){this.entityInputWindow=now;this.entityInputCount=0;this.entityInputTimes=[];}
       this.entityInputTimes.push(now-this.entityInputWindow);
-      // Arrival bursts are not sender floods: when this thread or the SCTP
-      // queue hitches, seconds of legitimately paced inputs land at once.
+      // Arrival bursts are not sender floods: when this thread or the network
+      // hitches, seconds of legitimately paced inputs land at once.
       // Drop the excess datagrams (the next input supersedes held state)
       // and only close on a rate sustained across most of a full window,
       // which a queue drain cannot produce twice in a row.
@@ -134,7 +134,7 @@ export class GameSession {
     const previous=this.lastInputAck;
     // Entity timestamps already drive arrival clocks. A 20 Hz independent
     // heartbeat retains execution timing/loss recovery without a 60 Hz stream
-    // of tiny JSON messages and their reverse-direction SCTP receipts.
+    // of tiny JSON messages and their acknowledgements.
     if(previous&&message.epoch===previous.epoch&&message.generation===previous.generation&&message.dropped===previous.dropped&&message.serverTick-previous.serverTick<3)return;
     const {client,type,...fields}=message;
     if(this.peer.send('state',{type:'input-ack',...fields}))this.lastInputAck=message;
@@ -146,8 +146,10 @@ export class GameSession {
     if(this.peer.send('state',{type:'entity-edge-results',...fields}))this.lastEdgeFeedback={key,at:now};
   }
   transportDiagnostics() {
-    return {...this.transportCounters,stateBuffered:this.peer.channels?.get('state')?.bufferedAmount()??0};
+    const stats=this.peer.transportStats?.();
+    return {...this.transportCounters,stateBuffered:this.peer.queuedBytes?.()??this.peer.channels?.get('state')?.bufferedAmount?.()??0,...(stats?{rtt:stats.rtt,minRtt:stats.minRtt,loss:stats.loss,packetsSent:stats.packetsSent,packetsLost:stats.packetsLost,path:stats.path}:{})};
   }
+  backlog() { return this.peer.stateBacklog?.() ?? this.peer.channels?.get('state')?.bufferedAmount?.() ?? 0; }
   entityPacket(m) {
     if(this.closed)return;
     const bytes=Buffer.from(m.buffer);
@@ -157,7 +159,7 @@ export class GameSession {
     // is skipped entire (all its parts and its own datagram), never paced.
     if(m.tick!==this.lastPacketTick){
       this.lastPacketTick=m.tick;
-      let backlog=0;try{backlog=this.peer.channels?.get('state')?.bufferedAmount()??0;}catch{this.peer.close('channel-state-send-failed');return;}
+      let backlog=0;try{backlog=this.backlog();}catch{this.peer.close('channel-state-send-failed');return;}
       if(backlog>STATE_BACKLOG_BYTES||(Number.isFinite(m.capturedAtUnixMs)&&Date.now()-m.capturedAtUnixMs>STATE_STALE_MS)){this.skippedTick=m.tick;this.transportCounters.stateSkippedSnapshots++;}
     }
     if(m.tick===this.skippedTick){this.transportCounters.stateDropped++;return;}

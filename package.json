@@ -8,13 +8,10 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "postinstall": "node scripts/patch-werift.mjs",
     "test": "node --test test/*.test.js",
     "start": "node src/main.js --serve"
   },
   "dependencies": {
-    "node-datachannel": "0.33.4",
-    "werift": "0.25.0",
     "ws": "8.22.0"
   },
   "bin": {
