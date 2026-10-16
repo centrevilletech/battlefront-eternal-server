@@ -6,7 +6,9 @@ set -euo pipefail
 exec 9>/deployment/releases/.deploy.lock
 flock -w 600 9
 STACK_NAME=battlefront-eternal-server-production
-case "$APP_IMAGE" in ghcr.io/joshualambert/battlefront-eternal-server:sha-*) ;; *) echo 'Unexpected image repository' >&2; exit 1;; esac
+# New images publish under the organization that owns the repository; the
+# stack may still name the original user namespace until its next update.
+case "$APP_IMAGE" in ghcr.io/centrevilletech/battlefront-eternal-server:sha-*) ;; *) echo 'Unexpected image repository' >&2; exit 1;; esac
 api() { curl --fail-with-body --silent --show-error --max-time 300 -H "X-API-Key: $PORTAINER_API_KEY" "$@"; }
 base="${PORTAINER_URL%/}/api"
 stack="$(api "$base/stacks" | jq -e --arg name "$STACK_NAME" --argjson endpoint "$PORTAINER_ENDPOINT_ID" '[.[]|select(.Name==$name and .EndpointId==$endpoint)] | if length==1 then .[0] else error("Expected existing match server stack") end')"
@@ -18,9 +20,9 @@ engine_source="$(jq -r '.Mounts[] | select(.Destination=="/engine") | .Source' <
 if [[ "${FORCE_DEPLOY:-false}" != true ]] &&
    jq -e --arg stackId "$id" -f .github/scripts/reusable-runtime.jq <<< "$current" >/dev/null &&
    [[ "$file" == *"$engine_source:/engine:ro"* ]] &&
-   [[ "$current_image" =~ ^ghcr.io/joshualambert/battlefront-eternal-server:sha-([a-f0-9]{40})$ ]]; then
+   [[ "$current_image" =~ ^ghcr.io/(joshualambert|centrevilletech)/battlefront-eternal-server:sha-([a-f0-9]{40})$ ]]; then
   change_status=0
-  bash .github/scripts/runtime-changed.sh "${BASH_REMATCH[1]}" || change_status=$?
+  bash .github/scripts/runtime-changed.sh "${BASH_REMATCH[2]}" || change_status=$?
   if [[ "$change_status" == 1 ]]; then
     echo "Healthy deployed runtime is unchanged; preserving the active match"
     exit 0
@@ -28,7 +30,7 @@ if [[ "${FORCE_DEPLOY:-false}" != true ]] &&
 fi
 # Update the image and the authorized two-core budget, preserving private mounts.
 file="$(jq -enr --arg file "$file" --arg image "$APP_IMAGE" '
-  "ghcr.io/joshualambert/battlefront-eternal-server:sha-[a-f0-9]+" as $pattern |
+  "ghcr.io/(?:joshualambert|centrevilletech)/battlefront-eternal-server:sha-[a-f0-9]+" as $pattern |
   if ([$file | scan($pattern)] | length) != 1 then error("Expected one pinned server image")
   else $file | sub($pattern; $image) end |
   "(?m)^(?<indent>[ ]+)cpus:[^\\n]+$" as $cpu |
