@@ -21,9 +21,11 @@ function mkPeer() {
   return peer;
 }
 function mkWorld() { const world = new EventEmitter(); world.networkContract = CONTRACT; world.sent = []; world.postMessage = m => world.sent.push(m); return world; }
-const publication = (tick, clients, own = clients) => ({ type: 'snapshotPublication', publishedAt: performance.timeOrigin + performance.now(),
-  shared: [{ tick, capturedAtUnixMs: Date.now(), clients, parts: [datagram(SHARED), datagram(SHARED)] }],
-  own: own.map(client => ({ client, tick, capturedAtUnixMs: Date.now(), buffer: datagram(OWN) })) });
+// Captured "in the future" so a stall of this shared test machine cannot
+// age these publications past STATE_STALE_MS (staleness has its own tests).
+const publication = (tick, clients, own = clients) => ({ type: 'snapshotPublication',
+  shared: [{ tick, capturedAtUnixMs: Date.now() + 60000, clients, parts: [datagram(SHARED), datagram(SHARED)] }],
+  own: own.map(client => ({ client, tick, capturedAtUnixMs: Date.now() + 60000, buffer: datagram(OWN) })) });
 
 test('only each session\'s newest snapshot is sent; an older unsent one is skipped whole', async () => {
   const world = mkWorld(), pa = mkPeer(), pb = mkPeer();

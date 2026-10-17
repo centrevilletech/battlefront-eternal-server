@@ -41,7 +41,8 @@ export class UdpPeer extends EventEmitter {
     try {
       if (typeof payload !== "string") {
         if (lane === "state") {
-          const magic = payload.length >= 4 ? payload.readUInt32LE(0) : 0;
+          // A Uint8Array view (newer engines: of the decrypted packet) or a Buffer.
+          const magic = payload.length >= 4 ? new DataView(payload.buffer, payload.byteOffset, 4).getUint32(0, true) : 0;
           if (payload.length > 1100 || !STATE_MAGICS.has(magic) || (magic === 0x31494e42 && payload.length < 16) || (magic === 0x31414e42 && payload.length !== 10)) throw Error("invalid entity message");
         } else if (payload.length > 32768) throw Error("invalid binary message");
         this.emit("binary", payload, lane);

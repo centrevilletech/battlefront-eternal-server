@@ -255,7 +255,10 @@ export class GameSession {
       if(now-(this.inputDropLoggedAt??-Infinity)>=60000){this.inputDropLoggedAt=now;console.warn('entity-input-rate',JSON.stringify({client:String(this.id).slice(0,16),dropped:this.transportCounters.inputsDropped}));}
       return;
     }
-    const bytes=Buffer.isBuffer(buffer)?buffer:Buffer.from(buffer.buffer??buffer,buffer.byteOffset??0,buffer.byteLength);
+    // A view of only this message's bytes: newer engines hand over a
+    // Uint8Array view of the whole decrypted packet's buffer, so neither
+    // the view's backing buffer nor a pool slice may cross as is.
+    const bytes=Buffer.isBuffer(buffer)?buffer:ArrayBuffer.isView(buffer)?Buffer.from(buffer.buffer,buffer.byteOffset,buffer.byteLength):Buffer.from(buffer);
     const magic=bytes.length>=4?bytes.readUInt32LE(0):0;
     if(bytes.length>1100||!((magic===0x31494e42&&bytes.length>=16)||(magic===0x31414e42&&bytes.length===10)))return this.peer.close('invalid-entity-input');
     // An exact-size copy crosses to the world in the transfer list; a

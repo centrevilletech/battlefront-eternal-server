@@ -156,6 +156,13 @@ test('inputs cross to the world batched, as exact-size transferred buffers',asyn
   assert.deepEqual(batch.m.inputs.map(i=>i.buffer.byteLength),[16,10]);
   assert(batch.m.inputs.every(i=>i.buffer instanceof ArrayBuffer&&batch.transfer.includes(i.buffer)),'each buffer is in the transfer list');
   assert.equal(new DataView(batch.m.inputs[0].buffer).getUint32(0,true),0x31494e42);
+  // Newer engines deliver a Uint8Array view into the decrypted packet:
+  // only the view's range crosses, never the packet's buffer.
+  const packet=new Uint8Array(1200);new DataView(packet.buffer).setUint32(40,0x31494e42,true);
+  peer.emit('binary',packet.subarray(40,64),'state');await flush();
+  const viewed=posted.at(-1).m.inputs[0].buffer;
+  assert.equal(viewed.byteLength,24);assert.notEqual(viewed,packet.buffer);assert.equal(packet.buffer.byteLength,1200,'the packet buffer was not transferred away');
+  assert.equal(new DataView(viewed).getUint32(0,true),0x31494e42);
   // Anything else the session posts goes after the inputs it queued.
   peer.emit('binary',input,'state');peer.emit('message','events',{type:'chat',text:'hi'});
   assert.deepEqual(posted.slice(-2).map(p=>p.m.type),['entityInputs','chat']);

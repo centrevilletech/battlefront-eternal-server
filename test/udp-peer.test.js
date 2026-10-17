@@ -37,11 +37,14 @@ test('inbound state is bounded binary input or sequenced JSON; anything else clo
   const keepalive = Buffer.alloc(10); keepalive.writeUInt32LE(0x31414e42);
   value.emit('message', 'state', input);
   value.emit('message', 'state', keepalive);
+  // A Uint8Array view into a larger decrypted packet (newer engines).
+  const packet = new Uint8Array(200); new DataView(packet.buffer).setUint32(30, 0x31494e42, true);
+  value.emit('message', 'state', packet.subarray(30, 54));
   value.emit('message', 'state', JSON.stringify({ type: 'entity-edge-ack', sequence: 2 }));
   value.emit('message', 'state', JSON.stringify({ type: 'entity-edge-ack', sequence: 1 }));
   value.emit('message', 'events', JSON.stringify({ type: 'chat', text: 'hi' }));
   value.emit('message', 'events', JSON.stringify({ type: 'pong', time: 1 }));
-  assert.deepEqual(binary, [['state', 40], ['state', 10]]);
+  assert.deepEqual(binary, [['state', 40], ['state', 10], ['state', 24]]);
   assert.deepEqual(messages, [['state', 'entity-edge-ack', 2], ['events', 'chat', undefined]], 'stale sequence and pongs are dropped');
   const snapshot = Buffer.alloc(40); snapshot.writeUInt32LE(0x31534e42);
   value.emit('message', 'state', snapshot);
