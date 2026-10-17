@@ -5,7 +5,7 @@ import { MessageChannel, Worker } from "node:worker_threads";
 import { validateNetworkContract, wireCompatibility } from "./network-contract.js";
 import { GameSession } from "./game-session.js";
 import { UdpPeer } from "./udp-peer.js";
-import { netMetrics, resetNetMetrics } from "./net-metrics.js";
+import { enableNetMetrics, netMetrics, resetNetMetrics } from "./net-metrics.js";
 
 // The engine owns the wire protocol (src/net, BFE-UDP/1). One endpoint on
 // the game port serves LAN, JOIN IP, online and desktop HOST players alike;
@@ -34,8 +34,9 @@ export function hostCandidates(port, families = ["IPv4", "IPv6"]) {
 // host could hold every seat. A household or LAN party behind one NAT fits.
 // isBanned may answer asynchronously (the network thread asks the main
 // thread); onPlayers hears every roster change.
-export async function startUdpServer({ engine, keys, port = 18451, host = null, maxSessions = 160, maxPerAddress = 8, transport, onPlayers = () => {} }) {
+export async function startUdpServer({ engine, keys, port = 18451, host = null, maxSessions = 160, maxPerAddress = 8, transport, metrics = false, onPlayers = () => {} }) {
   const { UdpEndpoint, identityKeys, CLOSE_CODE } = transport ?? await loadTransport(engine);
+  if (metrics) enableNetMetrics();
   let battle = null;
   const peers = new Map(), sessions = new Map(); // identity -> UdpPeer, GameSession
   const roster = () => onPlayers([...peers.keys()]);
@@ -56,6 +57,11 @@ export async function startUdpServer({ engine, keys, port = 18451, host = null, 
   } });
   const bound = await endpoint.listen({ port, host });
   endpoint.on("session", session => {
+    // A fault while setting up one player closes that player only.
+    try { admitSession(session); }
+    catch (error) { console.warn("Session setup failed:", error?.message ?? error); try { session.close(CLOSE_CODE.APPLICATION ?? 7, "Session setup failed."); } catch {} }
+  });
+  function admitSession(session) {
     if (!battle) { session.close(CLOSE_CODE.REJECTED, "The next battle is loading."); return; }
     // A reconnect replaces a stale session of the same identity at once.
     peers.get(session.id)?.close("replaced");
@@ -68,7 +74,7 @@ export async function startUdpServer({ engine, keys, port = 18451, host = null, 
     peer.on("fault", () => peer.close("invalid-message"));
     try { sessions.set(session.id, new GameSession(peer, battle.world, session.id, battle.welcome())); }
     catch (error) { peer.close("update-required", error.message); }
-  });
+  }
   return {
     endpoint, port: bound.port, families: bound.families,
     // One battle at a time: its world, wire contract, content and welcome.
@@ -97,12 +103,15 @@ export async function startUdpServer({ engine, keys, port = 18451, host = null, 
 // their own. Nothing in the per-packet path waits on this (main) thread,
 // which keeps admission policy, rendezvous, /info and the operator. The
 // returned object has the shape startUdpServer's does.
-export async function startNetworkThread({ engine, keys, port = 18451, host = null, maxSessions = 160, maxPerAddress = 8, profile = null }) {
-  const worker = new Worker(new URL("./network-worker.js", import.meta.url), { workerData: { engine, keys, port, host, maxSessions, maxPerAddress, ...(profile ? { profile } : {}) } });
+// onExit hears an unexpected exit of the thread (a crash): every session it
+// held is gone, the player list is already cleared, and the caller decides
+// how to restart. `metrics` turns on the thread's 1 ms event-loop monitor.
+export async function startNetworkThread({ engine, keys, port = 18451, host = null, maxSessions = 160, maxPerAddress = 8, profile = null, metrics = false, onExit = () => {} }) {
+  const worker = new Worker(new URL("./network-worker.js", import.meta.url), { workerData: { engine, keys, port, host, maxSessions, maxPerAddress, ...(metrics ? { metrics: true } : {}), ...(profile ? { profile } : {}) } });
   const waiters = new Map();
-  let nextId = 0, players = [], stats = null, isBanned = () => false, closing = false;
-  const call = (op, value, transfer) => new Promise((resolve, reject) => { const id = ++nextId; waiters.set(id, { resolve, reject }); worker.postMessage({ op, id, value }, transfer); });
-  const post = (op, value, transfer) => worker.postMessage({ op, value }, transfer);
+  let nextId = 0, players = [], stats = null, isBanned = () => false, closing = false, exited = false, started = false;
+  const call = (op, value, transfer) => exited ? Promise.reject(Error("Network thread exited")) : new Promise((resolve, reject) => { const id = ++nextId; waiters.set(id, { resolve, reject }); worker.postMessage({ op, id, value }, transfer); });
+  const post = (op, value, transfer) => { if (!exited) worker.postMessage({ op, value }, transfer); };
   const fail = error => { for (const waiter of waiters.values()) waiter.reject(error); waiters.clear(); };
   const ready = new Promise((resolve, reject) => {
     worker.on("message", async m => {
@@ -114,11 +123,18 @@ export async function startNetworkThread({ engine, keys, port = 18451, host = nu
       else if (m.op === "failed") reject(Error(m.value));
     });
     worker.on("error", error => { reject(error); fail(error); console.error("Network thread failed:", error.message); });
-    worker.on("exit", code => { reject(Error(`Network thread exited (${code})`)); fail(Error("Network thread exited")); if (!closing) console.error("Network thread exited:", code); });
+    worker.on("exit", code => {
+      exited = true; players = []; stats = null;
+      reject(Error(`Network thread exited (${code})`)); fail(Error("Network thread exited"));
+      if (closing) return;
+      console.error("Network thread exited:", code);
+      if (started) try { onExit(code); } catch (error) { console.error("Network thread restart:", error.message); }
+    });
   });
   let bound;
   try { bound = await ready; }
   catch (error) { await worker.terminate(); throw error; }
+  started = true;
   const relayHandle = ({ relayId, relayed }) => ({ relayed, permit: addresses => call("relayPermit", { relayId, addresses }), close: () => post("relayClose", { relayId }) });
   return {
     thread: worker, port: bound.port, families: bound.families,
@@ -133,6 +149,7 @@ export async function startNetworkThread({ engine, keys, port = 18451, host = nu
     // its own from now on; the welcome is fixed at the battle's start.
     setBattle({ world, content, name = () => "", welcome = () => ({}), isBanned: banned = () => false, maxPlayers = 64 }) {
       validateNetworkContract(world.networkContract);
+      if (exited) return;
       isBanned = banned;
       const { port1, port2 } = new MessageChannel();
       world.postMessage({ type: "attachNetwork", port: port1 }, [port1]);

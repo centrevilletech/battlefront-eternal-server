@@ -196,6 +196,45 @@ async function serve() {
     }, delayMs);
     return true;
   }
+  // The game port and this battle's LAN and online listeners on it. One
+  // native UDP endpoint lives for the life of the service: rotations keep
+  // its port, and LAN, JOIN IP, online and HOST players all use it. It runs
+  // on its own thread unless `networkThread: false`.
+  let connectNetwork = null, networkRestarts = 0, networkExitAt = 0;
+  async function attachNetwork(target, activeConfig, query) {
+    const keys = loadIdentity(join(directory, 'identity.json'));
+    const startGamePort = config.networkThread === false ? startUdpServer : startNetworkThread;
+    try { udp ??= await startGamePort({ engine: config.engine, keys, port: config.gamePort ?? 18451, host: config.bind ?? null, maxSessions: Math.max(32, (config.maxPlayers ?? 64) * 2 + 32), maxPerAddress: config.maxPlayersPerAddress ?? 8, metrics: metricsEnabled, onExit: networkExited }); }
+    catch(e) { status="fault"; error='Game port: '+e.message; console.error('UDP game port:',e.message); return; }
+    if (world !== target) return;
+    const isBanned = id => operator.banned(id) || Boolean(online?.globallyBanned(id));
+    try { local = await startLocalServer({ config:activeConfig, directory, world:target, query, udp, isBanned, identity: { keys, id:keyId(keys.publicKey), fingerprint:fingerprint(keys) } }); }
+    catch(e) { error=e.message; console.error('LAN listener:',e.message); }
+    if (config.onlineNoticeAccepted) {
+      try {
+        online = new OnlineServer({ config:activeConfig, directory, world:target, query, udp, isBanned:id=>operator.banned(id) });
+        online.on('fault', message => console.error('Online:', message));
+        await online.start(); console.log('Online server identity:', online.id);
+      } catch (e) { error = e.message; console.error('Online registration:', e.message); }
+    }
+  }
+  // The network thread crashed: its sessions are gone. The world drops every
+  // client (they reconnect), and the thread and this battle's listeners
+  // start again; a thread that keeps failing is retried more slowly.
+  function networkExited() {
+    if (stopping) return;
+    udp = null;
+    world?.postMessage({ type: 'dropClients' });
+    if (Date.now() - networkExitAt > 600000) networkRestarts = 0;
+    networkExitAt = Date.now();
+    const delay = Math.min(30000, 1000 * 2 ** Math.min(networkRestarts++, 5));
+    setTimeout(async () => {
+      if (stopping || udp) return;
+      const previous = [online, local]; online = null; local = null;
+      for (const listener of previous) { try { await listener?.close(); } catch (e) { console.error('Network restart:', e.message); } }
+      if (status === 'running' && !rotating && connectNetwork) { await connectNetwork(); if (udp) console.log('Network thread restarted'); }
+    }, delay).unref();
+  }
   async function launch() {
     error = null; tick = 0;
     const mission = config.rotation[rotationIndex];
@@ -213,6 +252,8 @@ async function serve() {
         autoSpawn: config.autoSpawn === true,
         autoAssignTeams: config.autoAssignTeams === true,
         metrics:metricsEnabled,
+        // Snapshot state per client per second (the engine's budget; README).
+        stateBytesPerSecond:Number.isFinite(config.stateBytesPerSecond)&&config.stateBytesPerSecond>0?config.stateBytesPerSecond:100000,
         ...(metricsEnabled&&process.env.BFE_WORLD_PROFILE?{profile:resolve(process.env.BFE_WORLD_PROFILE)}:{}),
       },
     });
@@ -225,23 +266,9 @@ async function serve() {
         config.content = m.content;
         const activeConfig = { ...config, rotation:[...config.rotation.slice(rotationIndex), ...config.rotation.slice(0,rotationIndex)] };
         world.postMessage({ type: "start" });
-        const keys = loadIdentity(join(directory, 'identity.json'));
-        // One native UDP endpoint for the life of the service: rotations keep
-        // its port, and LAN, JOIN IP, online and HOST players all use it. It
-        // runs on its own thread unless `networkThread: false`.
-        const startGamePort = config.networkThread === false ? startUdpServer : startNetworkThread;
-        try { udp ??= await startGamePort({ engine: config.engine, keys, port: config.gamePort ?? 18451, host: config.bind ?? null, maxSessions: Math.max(32, (config.maxPlayers ?? 64) * 2 + 32), maxPerAddress: config.maxPlayersPerAddress ?? 8 }); }
-        catch(e) { status="fault"; error='Game port: '+e.message; console.error('UDP game port:',e.message); return; }
-        const isBanned = id => operator.banned(id) || Boolean(online?.globallyBanned(id));
-        try { local = await startLocalServer({ config:activeConfig, directory, world, query, udp, isBanned, identity: { keys, id:keyId(keys.publicKey), fingerprint:fingerprint(keys) } }); }
-        catch(e) { error=e.message; console.error('LAN listener:',e.message); }
-        if (config.onlineNoticeAccepted) {
-          try {
-            online = new OnlineServer({ config:activeConfig, directory, world, query, udp, isBanned:id=>operator.banned(id) });
-            online.on('fault', message => console.error('Online:', message));
-            await online.start(); console.log('Online server identity:', online.id);
-          } catch (e) { error = e.message; console.error('Online registration:', e.message); }
-        }
+        const battleWorld = world;
+        connectNetwork = () => attachNetwork(battleWorld, activeConfig, query);
+        await connectNetwork();
       } else if (m.type === "finished") {
         rotate(true, ROTATION_DELAY_MS);
       } else if (m.type === "scores") operator.scores(m.match,m.players);

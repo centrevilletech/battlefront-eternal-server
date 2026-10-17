@@ -34,6 +34,11 @@ Each connected player receives up to `stateBytesPerSecond` of entity state
 it in config.json for a host with little upstream bandwidth, at the cost of
 less frequent updates for distant actors. The unified presentation records need
 fresh measurements; the earlier 85 KB/s full-field figure predates that path.
+A player's input datagrams past 75 per second (after a burst of 360) are
+dropped, never kicked: a server or network hitch delivers seconds of input at
+once. A session that sends nothing for 30 seconds is closed, and with an engine
+that reports unacknowledging clients the world drops one after 30 seconds too.
+If the network thread fails, every player is dropped and the thread restarts.
 Players join at the spawn screen and may pick their side; `autoAssignTeams: true`
 keeps the roster's assignment and `autoSpawn: true` puts a joining player on the
 field at once. A finished battle shows its end table for ten seconds

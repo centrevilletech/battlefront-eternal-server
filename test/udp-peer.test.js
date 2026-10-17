@@ -57,7 +57,11 @@ test('sends: JSON state gains a sequence; snapshot frames go out as state datagr
   const part = new Uint8Array(700), own = new Uint8Array(200);
   assert.equal(peer.sendStatePacket([part, own]), true);
   assert.deepEqual(value.sent.slice(3).map(([lane, payload]) => [lane, payload.length]), [['state', 700], ['state', 200]]);
-  assert.throws(() => peer.send('events', { text: 'x'.repeat(40000) }), /too large/);
+  // An oversized message is dropped with a log, never thrown into the
+  // caller (a world message loop on the network thread).
+  const warn = console.warn, logs = []; console.warn = (...args) => logs.push(args);
+  try { assert.equal(peer.send('events', { type: 'huge', text: 'x'.repeat(40000) }), false); } finally { console.warn = warn; }
+  assert.equal(value.sent.length, 5); assert.match(logs[0][0], /oversized/);
   peer.close('kicked', 'Kicked by the server operator.');
   assert.deepEqual(value.closes, [[CLOSE_CODE.KICKED, 'Kicked by the server operator.']]);
   assert.equal(peer.send('events', { type: 'late' }), false);

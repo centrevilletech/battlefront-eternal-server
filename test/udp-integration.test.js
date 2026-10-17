@@ -54,7 +54,8 @@ test('an engine client joins the UDP listener and plays through GameSession', { 
   const input = Buffer.alloc(24); input.writeUInt32LE(0x31494e42);
   session.send('state', input);
   session.send('events', JSON.stringify({ type: 'chat', text: 'over udp' }));
-  await waitFor(() => world.sent.some(m => m.type === 'entityInput') && world.sent.some(m => m.type === 'chat'));
+  await waitFor(() => world.sent.some(m => m.type === 'entityInputs') && world.sent.some(m => m.type === 'chat'));
+  assert.equal(world.sent.find(m => m.type === 'entityInputs').inputs[0].buffer.byteLength, 24);
   assert.equal(world.sent.find(m => m.type === 'chat').text, 'over udp');
   // An old client is told to update, by the handshake itself.
   const stale = new UdpEndpoint({ identity: identityKeys(loadIdentity(join(directory, 'stale.json'))) });

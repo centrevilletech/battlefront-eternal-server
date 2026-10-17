@@ -1,12 +1,13 @@
 import { EventEmitter } from "node:events";
 import { wireCompatibility } from "./network-contract.js";
+import { countNet } from "./net-metrics.js";
 
 // A game peer over the engine's native UDP transport (BFE-UDP/1), with the
 // interface GameSession uses. The endpoint has already authenticated both
 // identities and the hello before this exists, so a peer is born ready.
 const STATE_MAGICS = new Set([0x31494e42, 0x31414e42]); // BNI1 input, BNA1 ack keepalive
 // Close reasons as the transport's close codes (the engine's CLOSE_CODE).
-const REASON_CODES = Object.freeze({ closed: "NORMAL", replaced: "NORMAL", kicked: "KICKED", banned: "REJECTED", full: "REJECTED", "update-required": "VERSION", "server-shutdown": "SHUTDOWN" });
+const REASON_CODES = Object.freeze({ closed: "NORMAL", replaced: "NORMAL", kicked: "KICKED", banned: "REJECTED", full: "REJECTED", "update-required": "VERSION", "server-shutdown": "SHUTDOWN", idle: "IDLE" });
 const closeCode = (codes, reason) => codes[REASON_CODES[reason] ?? (/invalid|flood|requires|failed/.test(reason) ? "PROTOCOL" : "APPLICATION")] ?? 7;
 
 // Hysteresis on queueing delay: past this much round trip over the path's
@@ -60,8 +61,20 @@ export class UdpPeer extends EventEmitter {
   }
   send(label, value) {
     if (this.closed) return false;
-    const data = JSON.stringify(label === "state" ? { ...value, sequence: ++this.sequence } : value);
-    if (Buffer.byteLength(data) > 32768) throw Error("message too large");
+    return this.sendEncoded(label, JSON.stringify(label === "state" ? { ...value, sequence: ++this.sequence } : value), value?.type);
+  }
+  // An already serialized JSON message (one encode shared by every
+  // recipient of a broadcast). Never for the state lane, whose messages
+  // each carry this peer's own sequence. A message over the transport's
+  // bound is dropped with a log, never thrown into the caller's loop.
+  sendEncoded(label, data, type = "") {
+    if (this.closed) return false;
+    const bytes = Buffer.byteLength(data);
+    if (bytes > 32768) {
+      countNet("oversizedMessages");
+      console.warn("Dropped oversized message:", JSON.stringify({ lane: label, type: String(type ?? "").slice(0, 40), bytes }));
+      return false;
+    }
     return this.session.send(label, data);
   }
   sendBinary(value, label = "bulk") {
@@ -76,6 +89,11 @@ export class UdpPeer extends EventEmitter {
     for (const frame of frames) this.session.send("state", Buffer.from(frame.buffer ?? frame, frame.byteOffset ?? 0, frame.byteLength));
     return true;
   }
+  // Packs and seals what this peer has queued now, instead of in the
+  // transport's end-of-task flush: the world-message drain (game-session.js)
+  // charges each session's encryption to its time slice, and a welcome
+  // leaves before a snapshot queued after it.
+  flush() { if (!this.closed) this.session.flush?.(); }
   // GameSession's skip-whole-snapshot hint: the local socket queue, plus a
   // large value on alternate snapshots while the path shows queueing delay.
   stateBacklog() {

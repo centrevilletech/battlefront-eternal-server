@@ -3,7 +3,7 @@ import { liveActorRoster } from './actor-roster.js';
 import { Session } from 'node:inspector';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { parentPort, workerData } from 'node:worker_threads';
+import { parentPort, receiveMessageOnPort, workerData } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { dataReader } from './content.js';
@@ -25,7 +25,10 @@ try {
   let entityHost=null;
   const ensureEntityHost=()=>{
     if(!entityHost){
-      entityHost=createSnapshotHost({game,world});
+      // The per-client state budget (config stateBytesPerSecond); an engine
+      // without the option ignores it.
+      const stateBytesPerSecond=Number(workerData.stateBytesPerSecond);
+      entityHost=createSnapshotHost({game,world,...(Number.isFinite(stateBytesPerSecond)&&stateBytesPerSecond>0?{stateBytesPerSecond}:{})});
       process.once('exit',()=>entityHost?.dispose());
     }
     return entityHost;
@@ -52,7 +55,17 @@ try {
       if(out.inputAcks.length)toClients({type:'inputAck',recipients:out.inputAcks});
       if(out.edgeResults.length)toClients({type:'entityEdgeResults',recipients:out.edgeResults});
       for(const diagnostic of out.diagnostics)toClients({type:'entityDiagnostics',...diagnostic});
-      for(const events of out.reliableEvents??[])toClients({type:'gameplayEvents',...events});
+      // Gameplay events cross once per distinct record set with their
+      // recipients (every client usually shares one), and the network
+      // thread serializes each set once.
+      const eventSets=[];
+      for(const events of out.reliableEvents??[]){
+        const records=events.records??[];
+        let set=eventSets.find(e=>e.tick===events.tick&&e.records.length===records.length&&e.records.every((r,i)=>r===records[i]));
+        if(!set)eventSets.push(set={type:'gameplayEvents',tick:events.tick,records,clients:[]});
+        set.clients.push(events.client);
+      }
+      for(const set of eventSets)toClients(set);
       // One publication message: the shared entity parts cross to the main
       // thread once per baseline group (not once per client) and are fanned
       // out there; only the per-client own datagrams are individual.
@@ -77,15 +90,64 @@ try {
       toClients({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});
     }
   };
-  const step = () => {
+  const step = (publishing=true) => {
     const begun=performance.now();
     reportEdgeFaults(entityHost?.advanceEdges()??[]);
     const tick=world.step();
     reportEdgeFaults(entityHost?.consumedEdges(tick)??[]);
-    measure('sim',performance.now()-begun); publish(); if (tick % 300 === 0) report();
+    measure('sim',performance.now()-begun); if(publishing)publish(); if (tick % 300 === 0) report();
     measure('total',performance.now()-begun);
     if (game.battle.finished && !ended) { ended = true; report(); parentPort.postMessage({ type: 'finished', tick }); }
+    return tick;
   };
+  // Client messages that arrived while a catch-up batch ran, handled
+  // between its steps so inputs land on the ticks they were meant for
+  // instead of all before the batch.
+  const drainClientMessages=()=>{
+    const port=clientPort??parentPort;
+    for(let i=0;i<4096;i++){const entry=receiveMessageOnPort(port);if(!entry)return;handle(entry.message);}
+  };
+  // A catch-up batch publishes once, after its last step: the network
+  // thread keeps only each client's newest snapshot anyway, and every
+  // extra publication cost a full capture and encode. An engine whose
+  // snapshot host only captures on even ticks (no staleClients, the same
+  // change set) also publishes after the batch's last even tick.
+  const publishesAnyTick=()=>typeof entityHost?.staleClients==='function';
+  const runBatch=steps=>{
+    const anyTick=publishesAnyTick();
+    for(let i=0;i<steps;i++){
+      if(i>0)drainClientMessages();
+      const last=i===steps-1,nextTick=game.worldClock.tick+1;
+      step(last||(!anyTick&&i===steps-2&&nextTick%2===0));
+      debt-=1/60;
+    }
+  };
+  // A client the snapshot host has heard nothing from (no input, no
+  // acknowledgement) for this long leaves through the normal path, and its
+  // session is closed: a lost leave can no longer hold a ghost recipient.
+  const STALE_CLIENT_SECONDS=30;
+  let staleCheckedAt=performance.now();
+  const evictStale=()=>{
+    const now=performance.now();
+    if(now-staleCheckedAt<1000||typeof entityHost?.staleClients!=='function')return;
+    staleCheckedAt=now;
+    for(const client of entityHost.staleClients(STALE_CLIENT_SECONDS)??[]){
+      leave(client);
+      toClients({type:'clientEvicted',client,reason:'No messages from the client.'});
+    }
+  };
+  // Joins awaiting world.addPlayer, by client: a leave meanwhile cancels it.
+  const joining=new Map();
+  const leave=client=>{
+    const pending=joining.get(client);if(pending)pending.cancelled=true;
+    report();
+    {const name=clients.has(client)?world.players.get(client)?.character?.name:null;if(name)notice(`${name} left the game`,client);}
+    entityHost?.removeClient(client);clients.delete(client);
+    // Idempotent: a second leave (an eviction, then the session's close)
+    // must not move an already disconnected player's departure tick.
+    const actor=world.players.get(client);if(actor&&!actor.disconnectedAt)world.removePlayer(client);
+  };
+  let tickReportedAt=-Infinity;
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content, networkContract });
   // A notice from the server itself, to everyone in the battle (but `except`): a player joining or leaving, the operator's announcement.
   const notice=(text,except=null)=>{for(const [client,state] of clients)if(state.started&&client!==except)toClients({type:'chat',client,text,sender:'Server',playerId:0,team:false,admin:true});};
@@ -95,18 +157,41 @@ try {
       if(m.type==='resetMetrics'){if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
-        if (clients.has(m.client)) throw Error('already joined');
-        const entityRegistryMessage={type:'entityRegistry',client:m.client,registry:ensureEntityHost().descriptor()};
-        // Players join at the spawn screen and choose their side unless the
-        // operator configured autoSpawn / autoAssignTeams (the original's SET GAME OPTIONS).
-        await world.addPlayer(m.client, { spectator: m.spectator, name: typeof m.name === 'string' && m.name ? m.name.slice(0, 32) : 'Player', reliableFire:true, separateActions:true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
-        clients.set(m.client, { started: false });
-        entityHost.addClient(m.client);entityHost.setReady(m.client);toClients(entityRegistryMessage);
-        toClients({ type:'joined', client:m.client, player:{...world.player(m.client),snapshotMode:'snapshot-delta-v1'}, tick:game.worldClock.tick });
-        {const name=world.players.get(m.client)?.character?.name;if(name&&!m.spectator)notice(`${name} joined the game`,m.client);}
-      } else if (m.type === 'leave') { report(); {const name=clients.has(m.client)?world.players.get(m.client)?.character?.name:null;if(name)notice(`${name} left the game`,m.client);} entityHost?.removeClient(m.client);clients.delete(m.client); world.removePlayer(m.client); }
+        // A rejoin (a replaced session) waits for the join before it.
+        const previous=joining.get(m.client),pending={cancelled:false};
+        pending.done=new Promise(resolve=>{pending.finish=resolve;});
+        joining.set(m.client,pending);
+        try {
+          if(previous)await previous.done;
+          if(pending.cancelled)return;
+          if (clients.has(m.client)) throw Error('already joined');
+          const entityRegistryMessage={type:'entityRegistry',client:m.client,registry:ensureEntityHost().descriptor()};
+          // Players join at the spawn screen and choose their side unless the
+          // operator configured autoSpawn / autoAssignTeams (the original's SET GAME OPTIONS).
+          await world.addPlayer(m.client, { spectator: m.spectator, name: typeof m.name === 'string' && m.name ? m.name.slice(0, 32) : 'Player', reliableFire:true, separateActions:true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
+          // The session left while the world prepared the player: undo the
+          // add instead of registering a client no session will ever leave.
+          if(pending.cancelled){const actor=world.players.get(m.client);if(actor&&!actor.disconnectedAt)world.removePlayer(m.client);return;}
+          clients.set(m.client, { started: false });
+          entityHost.addClient(m.client);entityHost.setReady(m.client);toClients(entityRegistryMessage);
+          toClients({ type:'joined', client:m.client, player:{...world.player(m.client),snapshotMode:'snapshot-delta-v1'}, tick:game.worldClock.tick });
+          {const name=world.players.get(m.client)?.character?.name;if(name&&!m.spectator)notice(`${name} joined the game`,m.client);}
+        } catch(e) { if(pending.cancelled)return; throw e; }
+        finally { pending.finish(); if(joining.get(m.client)===pending)joining.delete(m.client); }
+      } else if (m.type === 'leave') leave(m.client);
+      // The network thread is gone (it restarts): every client leaves.
+      else if (m.type === 'dropClients') { for(const client of new Set([...clients.keys(),...joining.keys()]))leave(client); }
+      else if(m.type==='entityInputs'){
+        // A batch from one network-thread pass, each input an exact-size
+        // transferred buffer.
+        const now=wallNow();
+        for(const input of m.inputs){
+          // Network receipt to simulation, in ms (the network thread stamps it).
+          if(Number.isFinite(input.receivedAt))measure('inputHop',now-input.receivedAt);
+          if(clients.has(input.client))entityHost?.input(input.client,input.buffer);
+        }
+      }
       else if(m.type==='entityInput'){
-        // Network receipt to simulation, in ms (the network thread stamps it).
         if(Number.isFinite(m.receivedAt))measure('inputHop',wallNow()-m.receivedAt);
         if(clients.has(m.client))entityHost?.input(m.client,m.buffer);
       }
@@ -143,8 +228,12 @@ try {
           try {
             const now = performance.now(), accumulated = debt+(now-last)/1000; measurements.droppedTicks += Math.max(0,accumulated-8/60)*60; debt = Math.min(accumulated,8/60); last = now;
             let count = 0;
-            while (debt >= 1/60 && count++ < 4) { step(); debt -= 1/60; }
-            if (count) parentPort.postMessage({ type: 'tick', tick: game.worldClock.tick });
+            for (let pending = debt; pending >= 1/60 && count < 4; pending -= 1/60) count++;
+            runBatch(count);
+            evictStale();
+            // The main thread only shows the tick (status, health): once a
+            // second is plenty, not once per timer callback.
+            if (count && now-tickReportedAt>=1000) { tickReportedAt=now; parentPort.postMessage({ type: 'tick', tick: game.worldClock.tick }); }
           } catch(e) { clearInterval(timer); parentPort.postMessage({ type: 'error', message: e.message, stack: e.stack }); }
         }, 5);
       } else if (m.type === 'stop') { clearInterval(timer); timer = null; }

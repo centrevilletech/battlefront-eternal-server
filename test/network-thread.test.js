@@ -22,7 +22,7 @@ test('the network thread runs sessions against the world port and asks this thre
   const { identityKeys } = await import(pathToFileURL(join(engine, 'src/net/crypto.js')));
   const { NETWORK_CONTRACT } = await import(pathToFileURL(join(engine, 'src/runtime/network-contract.js')));
   const keys = loadIdentity(join(directory, 'server.json'));
-  const udp = await startNetworkThread({ engine, keys, port: 0, host: '127.0.0.1' });
+  const udp = await startNetworkThread({ engine, keys, port: 0, host: '127.0.0.1', metrics: true });
   // A stand-in world: the battle hands it a port, and client traffic for
   // the battle flows over that port, not through this thread.
   const world = new EventEmitter(), sent = [], direct = [];
@@ -59,8 +59,10 @@ test('the network thread runs sessions against the world port and asks this thre
   const input = Buffer.alloc(24); input.writeUInt32LE(0x31494e42);
   session.send('state', input);
   session.send('events', JSON.stringify({ type: 'chat', text: 'off the main thread' }));
-  await waitFor(() => direct.some(m => m.type === 'entityInput') && direct.some(m => m.type === 'chat'));
-  assert.ok(Number.isFinite(direct.find(m => m.type === 'entityInput').receivedAt), 'inputs carry their network receipt time');
+  await waitFor(() => direct.some(m => m.type === 'entityInputs') && direct.some(m => m.type === 'chat'));
+  const [crossed] = direct.find(m => m.type === 'entityInputs').inputs;
+  assert.ok(Number.isFinite(crossed.receivedAt), 'inputs carry their network receipt time');
+  assert.ok(crossed.buffer instanceof ArrayBuffer && crossed.buffer.byteLength === 24, 'an input crosses as an exact-size buffer, not a pool slice');
   const metrics = await udp.metrics();
   assert.ok(metrics.sendHopMs.count >= 1 && Number.isFinite(metrics.eventLoopMs.p99));
   // Bans are this thread's policy, asked for across threads.
@@ -118,4 +120,23 @@ test('relays allocated on the network thread carry a raced, probed session', { s
   assert.ok(turn.stats.relayedUp > 0 && turn.stats.relayedDown > 0);
   relay.close();
   await waitFor(() => udp.stats()?.relays === 0, 3000);
+});
+
+// A crashed network thread: the caller hears it once, the player list is
+// empty at once, and calls fail instead of waiting forever.
+test('an unexpected network thread exit is reported with the player list cleared', { skip: !engine && 'set BFE_ENGINE_DIR to an engine checkout' }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'bfe-net-thread-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const exits = [];
+  const udp = await startNetworkThread({ engine, keys: loadIdentity(join(directory, 'server.json')), port: 0, host: '127.0.0.1', onExit: code => exits.push(code) });
+  const error = console.error; console.error = () => {};
+  try {
+    await udp.thread.terminate();
+    await waitFor(() => exits.length === 1);
+  } finally { console.error = error; }
+  assert.deepEqual(udp.players(), []);
+  await assert.rejects(udp.metrics(), /exited/);
+  assert.doesNotThrow(() => udp.kick('nobody'));
+  await udp.close();
+  assert.equal(exits.length, 1, 'an orderly close is not a crash');
 });
