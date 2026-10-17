@@ -23,6 +23,9 @@ export class UdpPeer extends EventEmitter {
     this.remote = { ...session.hello, publicKey: session.publicKey };
     this.identity = session.id;
     this.spectator = session.hello?.content !== content;
+    // Operators need both fingerprints to tell stale client data from a
+    // client that loaded another battle (a rotation during its load).
+    if (this.spectator) console.warn("content-mismatch", JSON.stringify({ client: String(session.id ?? "").slice(0, 16), name: String(session.hello?.name ?? "").slice(0, 40), client_content: String(session.hello?.content ?? "").slice(0, 90), server_content: String(content ?? "").slice(0, 90) }));
     this.authenticated = true; this.closed = false; this.lastSequence = 0; this.sequence = 0;
     this.congested = false; this.skipNext = false;
     session.on("message", (lane, payload) => this.receive(lane, payload));
