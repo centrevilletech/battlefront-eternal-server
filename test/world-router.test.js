@@ -176,3 +176,22 @@ test('timers and socket reads keep running while a world backlog drains', async 
     assert.ok(readsDuring >= 200, `socket reads kept running during the drain (${readsDuring})`);
   } finally { clearInterval(blast); clearInterval(timer); socket.close(); blaster.close(); session.close(); }
 });
+
+test('each client gets only its own input ack and edge results, not every recipient', async () => {
+  const world = mkWorld(), pa = mkPeer(), pb = mkPeer();
+  const a = new GameSession(pa, world, 'alpha', {}), b = new GameSession(pb, world, 'beta', {});
+  try {
+    const recipients = client => ({ client, received: [1], results: [{ id: 1, status: 'consumed', tick: 5 }] });
+    world.emit('message', { type: 'entityEdgeResults', epoch: 1, generation: 0, recipients: [recipients('alpha'), recipients('beta')] });
+    world.emit('message', { type: 'inputAck', epoch: 1, generation: 0, serverTick: 10, recipients: [{ client: 'alpha', sequence: 3 }, { client: 'beta', sequence: 4 }] });
+    await flush();
+    for (const [peer, client] of [[pa, 'alpha'], [pb, 'beta']]) {
+      const sent = peer.sent.map(({ m }) => m);
+      const results = sent.find(m => m.type === 'entity-edge-results'), ack = sent.find(m => m.type === 'input-ack');
+      assert.ok(results && ack, `${client} got both`);
+      assert.equal(results.recipients, undefined); assert.equal(ack.recipients, undefined);
+      assert.deepEqual(results.received, [1]);
+      assert.equal(ack.sequence, client === 'alpha' ? 3 : 4);
+    }
+  } finally { a.close(); b.close(); }
+});

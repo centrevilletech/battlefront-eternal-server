@@ -121,7 +121,7 @@ class WorldRouter{
     else if(m.type==='inputAck'&&m.recipients){for(const recipient of m.recipients)this.latest(this.acks,m,recipient);}
     else if(m.type==='entityEdgeResults'&&m.recipients){for(const recipient of m.recipients)this.latest(this.edges,m,recipient);}
     else if(m.type==='gameplayEvents'&&Array.isArray(m.clients))this.broadcastEvents(m);
-    else if(m.recipients){for(const recipient of m.recipients)this.each(recipient.client,session=>session.handleWorld({...m,...recipient}));}
+    else if(m.recipients){for(const recipient of m.recipients)this.each(recipient.client,session=>session.handleWorld(WorldRouter.addressed(m,recipient)));}
     else if(m.client!=null)this.each(m.client,session=>session.handleWorld(m));
   }
   // The newest snapshot for a session replaces any it had not yet sent.
@@ -135,6 +135,10 @@ class WorldRouter{
     this.snapshots.set(session,work);
     return work;
   }
+  // One recipient's copy of a world message addressed to several: its own
+  // fields only, never the whole recipients list (63 players' feedback in
+  // every client's input ack or edge result, over 40 KB at 64 players).
+  static addressed(m,recipient){const {recipients,...base}=m;return {...base,...recipient};}
   latest(map,m,recipient){const sessions=this.sessions.get(recipient.client);if(sessions)for(const session of sessions)map.set(session,[m,recipient]);}
   // Gameplay events cross from the world once with their recipients and
   // are serialized once for all of them. A batch over the transport's
@@ -163,8 +167,8 @@ class WorldRouter{
     // Compact: never retain handled entries behind the read position.
     if(this.head>=inbox.length){inbox.length=0;this.head=0;}
     else if(this.head>=1024){inbox.splice(0,this.head);this.head=0;}
-    this.flush(this.acks,(session,[m,recipient])=>session.inputAck({...m,...recipient}),deadline);
-    this.flush(this.edges,(session,[m,recipient])=>session.edgeFeedback({...m,...recipient}),deadline);
+    this.flush(this.acks,(session,[m,recipient])=>session.inputAck(WorldRouter.addressed(m,recipient)),deadline);
+    this.flush(this.edges,(session,[m,recipient])=>session.edgeFeedback(WorldRouter.addressed(m,recipient)),deadline);
     this.flush(this.snapshots,(session,work)=>session.sendSnapshot(work),deadline);
     if(this.head<inbox.length||this.acks.size||this.edges.size||this.snapshots.size)this.schedule();
   }
