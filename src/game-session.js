@@ -225,7 +225,7 @@ export class GameSession {
       else if (m.type === 'joined') peer.send('events', { type: 'welcome', ...welcome, ...m.player, playerId: m.player.unitId, tick: m.tick });
       else if(m.type==='inputAck')this.inputAck(m);
       else if (m.type === 'chat') peer.send('events', m);
-      else if (m.type === 'reply') { peer.send('events', m.resultType==='inspection'?{...m,transport:this.transportDiagnostics()}:m); if(m.error && m.id === undefined)peer.close('invalid-input'); }
+      else if (m.type === 'reply') { peer.send('events', m.resultType==='inspection'?{...m,transport:this.transportDiagnostics()}:m); if(m.error && m.id === undefined)this.refuse(String(m.error)); }
     };
     this.router=routerFor(world);
     this.router.add(this);
@@ -300,6 +300,12 @@ export class GameSession {
       if(m.method==='start')this.started=true;
       this.router.post({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });
     } else if (m.type === 'resync' && this.allowResync()) this.router.post({ type: 'resync', client: this.id });
+  }
+  // The world refused the join itself (server or team full, no spawn): the
+  // client is told why before the session closes, not just "invalid input".
+  refuse(reason){
+    this.peer.send('events',{type:'gameplay-error',message:reason.slice(0,240)});
+    setTimeout(()=>this.peer.close(/full/i.test(reason)?'server-full':'join-refused'),50).unref?.();
   }
   allowResync() {const now=performance.now();if(now-(this.lastResync??-Infinity)<1000)return false;this.lastResync=now;return true;}
   inputAck(message){

@@ -195,3 +195,15 @@ test('each client gets only its own input ack and edge results, not every recipi
     }
   } finally { a.close(); b.close(); }
 });
+
+test('a join the world refuses tells the client why before closing', async () => {
+  const world = mkWorld(), pa = mkPeer();
+  const a = new GameSession(pa, world, 'alpha', {});
+  try {
+    world.emit('message', { type: 'reply', client: 'alpha', error: 'server full' });
+    await flush();
+    assert.ok(pa.sent.some(({ m }) => m.type === 'gameplay-error' && m.message === 'server full'));
+    await new Promise(r => setTimeout(r, 80));
+    assert.equal(pa.closedWith, 'server-full');
+  } finally { a.close(); }
+});
