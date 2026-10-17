@@ -16,6 +16,9 @@ export const STATE_STALE_MS=100;
 // players too), so this only catches a peer whose transport never timed
 // out: a ghost that would otherwise hold a seat and its world recipient.
 export const SESSION_SILENT_MS=30000;
+// Before its first `start` a client is loading the battle and sends
+// nothing: a slow machine loading a large map must not be closed for that.
+export const SESSION_JOIN_SILENT_MS=180000;
 // Inputs per session: a token bucket refilled at this rate up to this
 // burst. Clients send one input datagram per 60 Hz tick (or a 10 Hz ack
 // keepalive instead); arrival bursts after a server or network hitch land
@@ -83,7 +86,7 @@ class WorldRouter{
   }
   checkLiveness(){
     const now=performance.now();
-    for(const sessions of this.sessions.values())for(const session of sessions)if(now-session.heardAt>SESSION_SILENT_MS)this.guard(session,()=>session.peer.close('idle','No messages from the client.'));
+    for(const sessions of this.sessions.values())for(const session of sessions)if(now-session.heardAt>(session.started?SESSION_SILENT_MS:SESSION_JOIN_SILENT_MS))this.guard(session,()=>session.peer.close('idle','No messages from the client.'));
   }
   schedule(){if(!this.scheduled){this.scheduled=true;setImmediate(this.drain);}}
   // One session's failure closes that session, never the thread.
@@ -290,6 +293,7 @@ export class GameSession {
       const now=Date.now();if(now-(this.callWindow??0)>=1000){this.callWindow=now;this.callCount=0;}
       if(++this.callCount>32)return this.peer.close();
       if(m.method==='resync'&&!this.allowResync())return;
+      if(m.method==='start')this.started=true;
       this.router.post({ type: 'call', client: this.id, id: m.id, method: m.method, fields: m.fields ?? m.args ?? {} });
     } else if (m.type === 'resync' && this.allowResync()) this.router.post({ type: 'resync', client: this.id });
   }

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import dgram from 'node:dgram';
-import { GameSession, SESSION_SILENT_MS } from '../src/game-session.js';
+import { GameSession, SESSION_SILENT_MS, SESSION_JOIN_SILENT_MS } from '../src/game-session.js';
 import { netMetrics } from '../src/net-metrics.js';
 
 // The network thread's side of the world port: the handler only enqueues,
@@ -112,6 +112,7 @@ test('a silent session is closed, and so is one the world evicted', async () => 
   const world = mkWorld(), pa = mkPeer(), pb = mkPeer(), pc = mkPeer();
   const a = new GameSession(pa, world, 'alpha', {}), b = new GameSession(pb, world, 'beta', {}), c = new GameSession(pc, world, 'gamma', {});
   try {
+    a.started = b.started = true;
     a.heardAt -= SESSION_SILENT_MS + 1;
     b.heardAt -= SESSION_SILENT_MS + 1;
     const input = Buffer.alloc(10); input.writeUInt32LE(0x31414e42);
@@ -123,6 +124,27 @@ test('a silent session is closed, and so is one the world evicted', async () => 
     assert.equal(pc.closedWith, 'idle');
     assert.ok(['alpha', 'gamma'].every(client => world.sent.some(m => m.type === 'leave' && m.client === client)));
   } finally { a.close(); b.close(); c.close(); }
+});
+
+test('a client still loading its battle has longer before a silence close', () => {
+  const world = mkWorld(), pa = mkPeer();
+  const a = new GameSession(pa, world, 'alpha', {});
+  try {
+    a.heardAt -= SESSION_SILENT_MS + 1;
+    a.router.checkLiveness();
+    assert.equal(pa.closedWith, null, 'loading, not yet started');
+    pa.emit('message', 'events', { type: 'call', id: 1, method: 'start' });
+    assert.ok(a.started);
+    a.heardAt -= SESSION_SILENT_MS + 1;
+    a.router.checkLiveness();
+    assert.equal(pa.closedWith, 'idle');
+  } finally { a.close(); }
+  const pb = mkPeer(), b = new GameSession(pb, world, 'beta', {});
+  try {
+    b.heardAt -= SESSION_JOIN_SILENT_MS + 1;
+    b.router.checkLiveness();
+    assert.equal(pb.closedWith, 'idle');
+  } finally { b.close(); }
 });
 
 // After /tmp/bfe-opt-network/starve.mjs: a backlog of costly world messages
