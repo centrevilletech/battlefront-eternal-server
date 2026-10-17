@@ -20,7 +20,10 @@ Gameplay uses UDP 18451 (the game port, IPv4 and IPv6 sockets), HTTP `/info`
 uses TCP 18451, LAN discovery UDP 18452, and the diagnostic `/healthz` listener
 stays on loopback port 18450. Open UDP and TCP 18451 for players outside the LAN.
 Set `bind` and `gamePort` in config.json to change them. The game port is bound
-once for the life of the service; map rotations keep it. The transport handshake
+once for the life of the service; map rotations keep it. It runs on a network
+thread of its own, where every player's packets are encrypted, acknowledged and
+exchanged with the world simulation without passing through the main thread
+(`networkThread: false` keeps it on the main thread). The transport handshake
 proves both Ed25519 identities and refuses an incompatible client with an
 update-required reason before it joins. One network (an IPv4 address or an IPv6
 /64; loopback exempt) may hold `maxPlayersPerAddress` sessions (default 8), since

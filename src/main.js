@@ -11,7 +11,7 @@ import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { startLocalServer } from "./local-server.js";
 import { loadIdentity, keyId, fingerprint } from "./identity.js";
-import { startUdpServer } from "./udp-server.js";
+import { startNetworkThread, startUdpServer } from "./udp-server.js";
 import { OperatorStore, operatorHandler, operatorRequest } from "./operator.js";
 import { OnlineServer } from "./online-server.js";
 const directory = resolve(
@@ -227,8 +227,10 @@ async function serve() {
         world.postMessage({ type: "start" });
         const keys = loadIdentity(join(directory, 'identity.json'));
         // One native UDP endpoint for the life of the service: rotations keep
-        // its port, and LAN, JOIN IP, online and HOST players all use it.
-        try { udp ??= await startUdpServer({ engine: config.engine, keys, port: config.gamePort ?? 18451, host: config.bind ?? null, maxSessions: Math.max(32, (config.maxPlayers ?? 64) * 2 + 32), maxPerAddress: config.maxPlayersPerAddress ?? 8 }); }
+        // its port, and LAN, JOIN IP, online and HOST players all use it. It
+        // runs on its own thread unless `networkThread: false`.
+        const startGamePort = config.networkThread === false ? startUdpServer : startNetworkThread;
+        try { udp ??= await startGamePort({ engine: config.engine, keys, port: config.gamePort ?? 18451, host: config.bind ?? null, maxSessions: Math.max(32, (config.maxPlayers ?? 64) * 2 + 32), maxPerAddress: config.maxPlayersPerAddress ?? 8 }); }
         catch(e) { status="fault"; error='Game port: '+e.message; console.error('UDP game port:',e.message); return; }
         const isBanned = id => operator.banned(id) || Boolean(online?.globallyBanned(id));
         try { local = await startLocalServer({ config:activeConfig, directory, world, query, udp, isBanned, identity: { keys, id:keyId(keys.publicKey), fingerprint:fingerprint(keys) } }); }

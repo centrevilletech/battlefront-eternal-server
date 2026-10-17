@@ -34,7 +34,13 @@ try {
   const profileCall = method => new Promise((resolve,reject)=>profiler.post(method,(error,result)=>error?reject(error):resolve(result)));
   if(workerData.profile){profiler=new Session();profiler.connect();await profileCall('Profiler.enable');await profileCall('Profiler.start');}
   let threadCpuStart=process.threadCpuUsage();
-  const measurements = {sim:[],encode:[],total:[],droppedTicks:0,fireAccepted:0,fireRejected:0};
+  const measurements = {sim:[],encode:[],total:[],inputHop:[],droppedTicks:0,fireAccepted:0,fireRejected:0};
+  // Client traffic (inputs in; snapshots and per-client events out) runs
+  // over a direct port to the network thread when one is attached, never
+  // through the main thread. Control messages stay on parentPort.
+  let clientPort=null;
+  const toClients=(message,transfer)=>(clientPort??parentPort).postMessage(message,transfer);
+  const wallNow=()=>performance.timeOrigin+performance.now();
   const measure = (name,value) => { if(workerData.metrics && measurements[name].length<120000)measurements[name].push(value); };
   const publish = () => {
     const begun=performance.now();
@@ -43,10 +49,10 @@ try {
       // One worker message per kind (acks and edge results ride the
       // recipients list) and one per client for its snapshot datagrams:
       // per-datagram postMessages dominated publication at 64 clients.
-      if(out.inputAcks.length)parentPort.postMessage({type:'inputAck',recipients:out.inputAcks});
-      if(out.edgeResults.length)parentPort.postMessage({type:'entityEdgeResults',recipients:out.edgeResults});
-      for(const diagnostic of out.diagnostics)parentPort.postMessage({type:'entityDiagnostics',...diagnostic});
-      for(const events of out.reliableEvents??[])parentPort.postMessage({type:'gameplayEvents',...events});
+      if(out.inputAcks.length)toClients({type:'inputAck',recipients:out.inputAcks});
+      if(out.edgeResults.length)toClients({type:'entityEdgeResults',recipients:out.edgeResults});
+      for(const diagnostic of out.diagnostics)toClients({type:'entityDiagnostics',...diagnostic});
+      for(const events of out.reliableEvents??[])toClients({type:'gameplayEvents',...events});
       // One publication message: the shared entity parts cross to the main
       // thread once per baseline group (not once per client) and are fanned
       // out there; only the per-client own datagrams are individual.
@@ -55,9 +61,9 @@ try {
         const transfer=[];
         for(const group of shared)transfer.push(...group.parts);
         for(const packet of own)transfer.push(packet.buffer);
-        parentPort.postMessage({type:'snapshotPublication',shared,own},transfer);
+        toClients({type:'snapshotPublication',shared,own,publishedAt:wallNow()},transfer);
       }
-      for(const fault of out.faults)parentPort.postMessage({type:'snapshotFault',client:fault.client,reason:'entity-prerequisite-failed:'+String(fault.error.message).slice(0,100)});
+      for(const fault of out.faults)toClients({type:'snapshotFault',client:fault.client,reason:'entity-prerequisite-failed:'+String(fault.error.message).slice(0,100)});
     }
     measure('encode',performance.now()-begun);
   };
@@ -68,7 +74,7 @@ try {
   const reportEdgeFaults=faults=>{
     for(const {client,error} of faults){
       const state=clients.get(client);if(state)state.started=false;entityHost?.setStarted(client,false);
-      parentPort.postMessage({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});
+      toClients({type:'snapshotFault',client,reason:'entity-edge-failed:'+String(error.message).slice(0,100)});
     }
   };
   const step = () => {
@@ -82,9 +88,10 @@ try {
   };
   parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content, networkContract });
   // A notice from the server itself, to everyone in the battle (but `except`): a player joining or leaving, the operator's announcement.
-  const notice=(text,except=null)=>{for(const [client,state] of clients)if(state.started&&client!==except)parentPort.postMessage({type:'chat',client,text,sender:'Server',playerId:0,team:false,admin:true});};
-  parentPort.on('message', async m => {
+  const notice=(text,except=null)=>{for(const [client,state] of clients)if(state.started&&client!==except)toClients({type:'chat',client,text,sender:'Server',playerId:0,team:false,admin:true});};
+  const handle = async m => {
     try {
+      if(m.type==='attachNetwork'){clientPort?.close?.();clientPort=m.port;clientPort.on('message',handle);return;}
       if(m.type==='resetMetrics'){if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:world.players.size,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }
       else if (m.type === 'join') {
@@ -94,11 +101,13 @@ try {
         // operator configured autoSpawn / autoAssignTeams (the original's SET GAME OPTIONS).
         await world.addPlayer(m.client, { spectator: m.spectator, name: typeof m.name === 'string' && m.name ? m.name.slice(0, 32) : 'Player', reliableFire:true, separateActions:true, spawn: workerData.autoSpawn===true, teamSelect: workerData.autoAssignTeams!==true });
         clients.set(m.client, { started: false });
-        entityHost.addClient(m.client);entityHost.setReady(m.client);parentPort.postMessage(entityRegistryMessage);
-        parentPort.postMessage({ type:'joined', client:m.client, player:{...world.player(m.client),snapshotMode:'snapshot-delta-v1'}, tick:game.worldClock.tick });
+        entityHost.addClient(m.client);entityHost.setReady(m.client);toClients(entityRegistryMessage);
+        toClients({ type:'joined', client:m.client, player:{...world.player(m.client),snapshotMode:'snapshot-delta-v1'}, tick:game.worldClock.tick });
         {const name=world.players.get(m.client)?.character?.name;if(name&&!m.spectator)notice(`${name} joined the game`,m.client);}
       } else if (m.type === 'leave') { report(); {const name=clients.has(m.client)?world.players.get(m.client)?.character?.name:null;if(name)notice(`${name} left the game`,m.client);} entityHost?.removeClient(m.client);clients.delete(m.client); world.removePlayer(m.client); }
       else if(m.type==='entityInput'){
+        // Network receipt to simulation, in ms (the network thread stamps it).
+        if(Number.isFinite(m.receivedAt))measure('inputHop',wallNow()-m.receivedAt);
         if(clients.has(m.client))entityHost?.input(m.client,m.buffer);
       }
       else if(m.type==='playerLink'){const actor=world.players.get(m.client);if(actor&&Number.isFinite(m.rtt))actor.link={rtt:m.rtt,path:m.path&&typeof m.path==='object'?{kind:String(m.path.kind||''),family:String(m.path.family||'')}:null};}
@@ -109,7 +118,7 @@ try {
         if (!sender || !clients.get(m.client)?.started) return;
         for (const [client, state] of clients) {
           if (!state.started || (m.team && world.player(client)?.team !== sender.team)) continue;
-          parentPort.postMessage({ type:'chat',client,text:m.text,team:m.team,playerId:sender.unitId,sender:world.players.get(m.client)?.character?.name || `Player ${sender.unitId}` });
+          toClients({ type:'chat',client,text:m.text,team:m.team,playerId:sender.unitId,sender:world.players.get(m.client)?.character?.name || `Player ${sender.unitId}` });
         }
       } else if (m.type === 'resync') entityHost?.resync(m.client);
       else if (m.type === 'call') {
@@ -125,7 +134,7 @@ try {
           const actor=world.players.get(m.client),unit=actor?.unit,weapon=unit?.combat?.arsenal?.current(0);
           result = { ...result, type: 'inspection', player:{...player,inputsStale:actor?.inputsStale,lastInputAgeMs:actor?Math.max(0,performance.now()-actor.lastInputAt):null,alive:unit?.alive,aimYaw:unit?.soldier?.aimYaw,aimPitch:unit?.soldier?.aimPitch,weapon:weapon?{clip:weapon.clip,wait:weapon.wait,reloading:weapon.reloading,held:weapon.held,bottomless:weapon.bottomless,rounds:weapon.rounds}:null,trigger:actor?.fire?.buttons?.slice(0,2),pendingFire:actor?.fire?.queue?.length,networkShot:unit?.networkShot?{id:unit.networkShot.id,tick:unit.networkShot.tick,viewTick:unit.networkShot.viewTick}:null}, snapshotHost:entityHost?.inspect(m.client),inputDiagnostics:entityHost?.inputDiagnostics(m.client),players: clients.size, running: Boolean(timer) };
         }
-        parentPort.postMessage({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
+        toClients({ ...result, type: 'reply', resultType: result.type, id: m.id, client: m.client });
       } else if (m.type === 'step') {
         for (let i = 0; i < Math.min(m.count ?? 1, 600); i++) step();
         parentPort.postMessage({ type: 'state', state: worldState(game) });
@@ -140,7 +149,9 @@ try {
         }, 5);
       } else if (m.type === 'stop') { clearInterval(timer); timer = null; }
     } catch(e) {
-      parentPort.postMessage(m.client ? { type: 'reply', client: m.client, id: m.id, error: e.message } : { type: 'error', message: e.message, stack: e.stack });
+      if(m.client)toClients({ type: 'reply', client: m.client, id: m.id, error: e.message });
+      else parentPort.postMessage({ type: 'error', message: e.message, stack: e.stack });
     }
-  });
+  };
+  parentPort.on('message', handle);
 } catch(e) { parentPort.postMessage({ type: 'error', message: e.message, stack: e.stack }); }

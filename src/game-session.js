@@ -1,4 +1,5 @@
 import { wireCompatibility } from './network-contract.js';
+import { recordHop, wallNow } from './net-metrics.js';
 // A snapshot behind more than this is skipped whole, and the next snapshot
 // is still encoded against the client's acknowledged baseline. The native
 // UDP peer reports its socket queue plus a congestion hint (udp-peer.js).
@@ -29,19 +30,19 @@ function routerFor(world){
     const fanoutQueue=[];let fanoutAt=0,fanoutDraining=false;
     const drainFanout=()=>{
       let sent=0;
-      while(fanoutAt<fanoutQueue.length&&sent<32){const [session,packet]=fanoutQueue[fanoutAt++];session.entityPacket(packet);sent++;}
+      while(fanoutAt<fanoutQueue.length&&sent<32){const [session,packet,publishedAt]=fanoutQueue[fanoutAt++];session.entityPacket(packet,publishedAt);sent++;}
       if(fanoutAt>=fanoutQueue.length){fanoutQueue.length=0;fanoutAt=0;fanoutDraining=false;}
       else setImmediate(drainFanout);
     };
-    const enqueueFanout=(session,packet)=>{fanoutQueue.push([session,packet]);if(!fanoutDraining){fanoutDraining=true;setImmediate(drainFanout);}};
+    const enqueueFanout=(session,packet,publishedAt)=>{fanoutQueue.push([session,packet,publishedAt]);if(!fanoutDraining){fanoutDraining=true;setImmediate(drainFanout);}};
     world.on('message',m=>{
       if(m.type==='snapshotPublication'){
         // The worker encoded and transferred each baseline group's parts
         // once; expand them here, parts before each client's own
         // datagram, through the same per-session skip rules. The shared
         // buffers are only read (the peer copies per send), never mutated.
-        for(const group of m.shared??[])for(const client of group.clients){const sessions=router.get(client);if(sessions)for(const session of sessions)for(const part of group.parts)enqueueFanout(session,{tick:group.tick,capturedAtUnixMs:group.capturedAtUnixMs,buffer:part});}
-        for(const packet of m.own??[]){const sessions=router.get(packet.client);if(sessions)for(const session of sessions)enqueueFanout(session,packet);}
+        for(const group of m.shared??[])for(const client of group.clients){const sessions=router.get(client);if(sessions)for(const session of sessions)for(const part of group.parts)enqueueFanout(session,{tick:group.tick,capturedAtUnixMs:group.capturedAtUnixMs,buffer:part},m.publishedAt);}
+        for(const packet of m.own??[]){const sessions=router.get(packet.client);if(sessions)for(const session of sessions)enqueueFanout(session,packet,m.publishedAt);}
       }
       else if(m.recipients){for(const recipient of m.recipients){const sessions=router.get(recipient.client);if(sessions)for(const session of sessions)session.handleWorld({...m,...recipient});}}
       else if(m.client!=null){const sessions=router.get(m.client);if(sessions)for(const session of sessions)session.handleWorld(m);}
@@ -96,7 +97,7 @@ export class GameSession {
         if(now-this.entityInputWindow<900)return;
         console.warn('entity-input-flood',JSON.stringify({count:this.entityInputCount,windowMs:now-this.entityInputWindow,receiptOffsetsMs:this.entityInputTimes.slice(-121)}));return peer.close('entity-input-flood');
       }
-      this.world.postMessage({type:'entityInput',client:this.id,buffer:bytes});
+      this.world.postMessage({type:'entityInput',client:this.id,buffer:bytes,receivedAt:wallNow()});
     });
     // Each measured round trip, with the selected path, for the roster the
     // world sends everyone (the Tab player list's PING and CONNECTION).
@@ -150,7 +151,7 @@ export class GameSession {
     return {...this.transportCounters,stateBuffered:this.peer.queuedBytes?.()??this.peer.channels?.get('state')?.bufferedAmount?.()??0,...(stats?{rtt:stats.rtt,minRtt:stats.minRtt,loss:stats.loss,packetsSent:stats.packetsSent,packetsLost:stats.packetsLost,path:stats.path}:{})};
   }
   backlog() { return this.peer.stateBacklog?.() ?? this.peer.channels?.get('state')?.bufferedAmount?.() ?? 0; }
-  entityPacket(m) {
+  entityPacket(m,publishedAt) {
     if(this.closed)return;
     const bytes=Buffer.from(m.buffer);
     const magic=bytes.length>=4?bytes.readUInt32LE(0):0;
@@ -169,6 +170,7 @@ export class GameSession {
     const accepted=this.peer.sendStatePacket?.([bytes],{maxBuffered:Number.MAX_SAFE_INTEGER})??this.peer.sendBinary(bytes,'state');
     if(!accepted){this.transportCounters.stateDropped++;return;}
     this.transportCounters.stateGroups++;this.transportCounters.stateBytes+=bytes.length;
+    if(publishedAt)recordHop('sendHop',wallNow()-publishedAt);
   }
   close() {
     if(this.closed)return;this.closed=true;
