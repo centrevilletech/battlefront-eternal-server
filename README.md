@@ -41,7 +41,9 @@ that reports unacknowledging clients the world drops one after 30 seconds too.
 If the network thread fails, every player is dropped and the thread restarts.
 Players join at the spawn screen and may pick their side; `autoAssignTeams: true`
 keeps the roster's assignment and `autoSpawn: true` puts a joining player on the
-field at once. A finished battle shows its end table for ten seconds
+field at once. Bots fill each team to 32 and players replace them; `ai: "off"`
+fields no bots at all, only the people who join (up to 32 a side, a duel
+server). A finished battle shows its end table for ten seconds
 (`rotationDelayMs`) before the next map loads. The operator menu (and the desktop HOST) can restart the match.
 
 Accepting the online notice enables directory registration, 20-second

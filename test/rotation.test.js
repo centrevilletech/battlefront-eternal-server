@@ -7,7 +7,9 @@ import { once } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-test('finished matches replace the world and advance the configured playlist', {timeout:15000}, async () => {
+// Runs the service on a fixture engine whose battles end after 12 ticks and
+// returns the first three queries it launched.
+async function launches(options={}) {
   const root = await mkdtemp(join(tmpdir(),'bfe-rotation-'));
   const engine=join(root,'engine'), data=join(root,'data'), state=join(root,'state'), log=join(root,'matches');
   await Promise.all([mkdir(join(engine,'src/runtime'),{recursive:true}),mkdir(data),mkdir(state)]);
@@ -25,18 +27,31 @@ test('finished matches replace the world and advance the configured playlist', {
   await writeFile(join(engine,'src/net/endpoint.js'),"import {EventEmitter} from 'node:events';export class UdpEndpoint extends EventEmitter{async listen(){return {port:40000,families:['IPv4']}}stats(){return {}}close(){}}");
   await writeFile(join(engine,'src/net/crypto.js'),'export const identityKeys=keys=>keys;');
   await writeFile(join(engine,'src/net/connection.js'),'export const CLOSE_CODE={NORMAL:0,REJECTED:4,VERSION:3,KICKED:5,SHUTDOWN:6};');
-  await writeFile(join(state,'config.json'),JSON.stringify({engine,data,rotation:['swbf1/nab2:rep:conquest','swbf1/bes2:all:conquest'],gamePort:0,discovery:false,rotationDelayMs:300}));
+  await writeFile(join(state,'config.json'),JSON.stringify({engine,data,rotation:['swbf1/nab2:rep:conquest','swbf1/bes2:all:conquest'],gamePort:0,discovery:false,rotationDelayMs:300,...options}));
   const child=spawn(process.execPath,['src/main.js','--serve'],{cwd:new URL('..',import.meta.url),env:{...process.env,BFE_STATE_DIR:state,PORT:'0'},stdio:['ignore','pipe','pipe']});
   let output=''; child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
   try {
     let matches=[];
     for(let n=0;n<100;n++){assert.equal(child.exitCode,null,output);try{matches=(await readFile(log,'utf8')).trim().split('\n')}catch{}if(matches.length>=3)break;await new Promise(r=>setTimeout(r,100));}
     assert(matches.length>=3,output);
+    return matches.slice(0,3);
+  } finally { if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited;}await rm(root,{recursive:true,force:true}); }
+}
+
+test('finished matches replace the world and advance the configured playlist', {timeout:15000}, async () => {
+    const matches = await launches();
     assert.match(matches[0],/map=nab2&side=rep/);
     assert.match(matches[1],/map=bes2&side=all/);
     assert.match(matches[2],/map=nab2&side=rep/);
     const tokens=matches.slice(0,3).map(query=>new URLSearchParams(query).get('match'));
     for(const token of tokens)assert.match(token,/^[a-f0-9]{32}$/);
     assert.equal(new Set(tokens).size,3,'returning to the same map still creates a distinct launch');
-  } finally { if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGTERM');await exited;}await rm(root,{recursive:true,force:true}); }
+    for(const query of matches)assert.equal(new URLSearchParams(query).get('ai'),'classic','bots by default');
+});
+
+test('ai "off" plays every battle of the playlist without bots', {timeout:15000}, async () => {
+  const matches = await launches({ai:'off'});
+  assert.match(matches[0],/map=nab2&side=rep/);
+  assert.match(matches[1],/map=bes2&side=all/, 'the rotation, as configured');
+  for(const query of matches)assert.equal(new URLSearchParams(query).get('ai'),'off');
 });
