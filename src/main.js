@@ -14,6 +14,7 @@ import { loadIdentity, keyId, fingerprint } from "./identity.js";
 import { startNetworkThread, startUdpServer } from "./udp-server.js";
 import { OperatorStore, operatorHandler, operatorRequest } from "./operator.js";
 import { OnlineServer } from "./online-server.js";
+import { browserInfo, mapNames } from "./browser-info.js";
 const directory = resolve(
   process.env.BFE_STATE_DIR ?? join(homedir(), ".local/share/bfeserver"),
 );
@@ -213,11 +214,13 @@ async function serve() {
     catch(e) { status="fault"; error='Game port: '+e.message; console.error('UDP game port:',e.message); return; }
     if (world !== target) return;
     const isBanned = id => operator.banned(id) || Boolean(online?.globallyBanned(id));
-    try { local = await startLocalServer({ config:activeConfig, directory, world:target, query, udp, isBanned, identity: { keys, id:keyId(keys.publicKey), fingerprint:fingerprint(keys) } }); }
+    // What the server browser shows of this battle (src/browser-info.js).
+    const names = mapNames(config.data), browser = () => browserInfo({ config: activeConfig, query, startedAt, names });
+    try { local = await startLocalServer({ config:activeConfig, directory, world:target, query, udp, isBanned, browser, identity: { keys, id:keyId(keys.publicKey), fingerprint:fingerprint(keys) } }); }
     catch(e) { error=e.message; console.error('LAN listener:',e.message); }
     if (config.onlineNoticeAccepted) {
       try {
-        online = new OnlineServer({ config:activeConfig, directory, world:target, query, udp, isBanned:id=>operator.banned(id) });
+        online = new OnlineServer({ config:activeConfig, directory, world:target, query, udp, browser, isBanned:id=>operator.banned(id) });
         online.on('fault', message => console.error('Online:', message));
         await online.start(); console.log('Online server identity:', online.id);
       } catch (e) { error = e.message; console.error('Online registration:', e.message); }

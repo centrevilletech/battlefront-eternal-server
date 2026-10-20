@@ -28,8 +28,9 @@ export function parseCandidates(value) {
 // candidates (host, reflexive, relayed); the session itself is the game
 // port's native UDP handshake, so a lost master never drops a battle.
 export class OnlineServer extends EventEmitter {
-  constructor({ config, directory, world, query, udp, isBanned = () => false }) {
-    super(); this.contract=validateNetworkContract(world.networkContract);this.wire=wireCompatibility(this.contract); this.isBanned=isBanned; this.config = config; this.world = world; this.query = query; this.udp = udp;
+  constructor({ config, directory, world, query, udp, browser = () => ({}), isBanned = () => false }) {
+    super(); this.contract=validateNetworkContract(world.networkContract);this.wire=wireCompatibility(this.contract); this.isBanned=isBanned; this.config = config; this.world = world; this.query = query; this.udp = udp; this.browser = browser;
+    this.beats = 0; this.familyDown = {};
     this.keys = loadIdentity(join(directory, 'identity.json')); this.id = keyId(this.keys.publicKey);
     this.master = new MasterClient({ url: config.master, keys: this.keys, noticeAccepted: config.onlineNoticeAccepted });
     this.bans = new BanCache(this.master, join(directory, 'master-ban-key'));
@@ -38,18 +39,36 @@ export class OnlineServer extends EventEmitter {
     this.master.on('signal', m => this.signal(m).catch(e => this.emit('fault', e.message)));
     this.master.on('disconnected', () => { if (!this.closed) this.reconnect(); });
   }
+  // A direct-only server (relayPolicy never) names its game port: the master
+  // lists it at the address each heartbeat comes from, so players can
+  // measure their ping before joining. Others keep their address private.
   listing() {
+    const direct = this.config.relayPolicy === 'never';
     return { name: this.config.name, ...this.wire, content: this.content,
       rotation: this.config.rotation, players: this.udp?.players().length ?? 0,
       maxPlayers: this.config.maxPlayers ?? 64, relayPolicy: this.config.relayPolicy,
-      endpoints: [], fingerprint: fingerprint(this.keys) };
+      endpoints: direct ? [{ port: this.udp?.port ?? this.config.gamePort ?? 18451, transport: 'udp' }] : [],
+      fingerprint: fingerprint(this.keys), ...this.browser() };
+  }
+  // A direct server's heartbeats take IPv4 and IPv6 in turn, so the master
+  // learns its address on each family. A family this host cannot reach the
+  // master on is left alone for ten minutes; that beat goes the usual way.
+  async beat() {
+    const family = this.config.relayPolicy === 'never' ? [4, 6][this.beats++ % 2] : 0;
+    const forced = family && !(this.familyDown[family] > Date.now()) ? family : 0;
+    try { await this.master.request('/v1/servers/' + this.id, 'PUT', this.listing(), { family: forced }); }
+    catch (error) {
+      if (!forced || error.status) throw error;
+      this.familyDown[forced] = Date.now() + 600000;
+      await this.master.request('/v1/servers/' + this.id, 'PUT', this.listing());
+    }
   }
   async start() {
     if (this.config.honorGlobalBans) await this.bans.refresh();
     await this.master.request('/v1/servers', 'POST', this.listing());
     await this.master.connect();
     await this.discover();
-    this.heartbeat = setInterval(() => this.master.request('/v1/servers/' + this.id, 'PUT', this.listing()).catch(e => this.emit('fault', e.message)), 20000);
+    this.heartbeat = setInterval(() => this.beat().catch(e => this.emit('fault', e.message)), 20000);
     this.banTimer = setInterval(() => { if(this.config.honorGlobalBans)this.bans.refresh().then(()=>{for(const id of this.udp?.players()??[])if(this.bans.contains(id))this.udp.kick(id,'You are banned from online play.');}).catch(e=>this.emit('fault',e.message)); },120000);
     // Reflexive addresses drift with NAT mappings; relays without a
     // session are released.

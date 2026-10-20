@@ -46,6 +46,16 @@ fields no bots at all, only the people who join (up to 32 a side, a duel
 server). A finished battle shows its end table for ten seconds
 (`rotationDelayMs`) before the next map loads. The operator menu (and the desktop HOST) can restart the match.
 
+For the server browser, config.json may also hold `description` (280
+characters), `location` (80) and `sponsor` (`{ "name", "url", "logo" }`, the
+links https only). The listing and `/info` carry them with the battle being
+played (`battle`: map, its name from the prepared catalog, side, era, mode;
+`query`, which a player's page loads), `bots`, `autoAssignTeams` and
+`uptime` (seconds). A direct-only server (`relayPolicy: never`) also lists
+its game port, which the master publishes at the address each heartbeat
+comes from; its heartbeats alternate IPv4 and IPv6 so both are known, and
+players' desktops measure their ping to it.
+
 Accepting the online notice enables directory registration, 20-second
 heartbeats and master WebSocket rendezvous. Rendezvous exchanges UDP candidates:
 the server answers with its public and reflexive (STUN) game-port addresses
