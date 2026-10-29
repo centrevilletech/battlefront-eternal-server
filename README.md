@@ -161,3 +161,15 @@ Authenticated loopback admin actions `reset-metrics` and `metrics` delimit the
 measurement window and return bounded simulation/publication samples and worker
 CPU usage. Reading metrics writes the configured V8 profile. Remote gameplay
 peers cannot enable profiling or choose output paths.
+
+## Independent project and trademarks
+
+Battlefront Eternal is an independent fan project. It is not affiliated with
+or endorsed by Lucasfilm, Disney, Electronic Arts, Aspyr, Valve, GOG or the
+developers and publishers of the original games. Star Wars, Battlefront, Steam
+and GOG are trademarks of their respective owners.
+
+No original game files are included or distributed with this server, its
+image or its releases. Each server prepares its game data from the operator's
+own Steam or GOG copy of Star Wars: Battlefront (Classic, 2004), and that
+prepared data stays on the operator's machine.
