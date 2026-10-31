@@ -63,8 +63,14 @@ test('sends: JSON state gains a sequence; snapshot frames go out as state datagr
   // An oversized message is dropped with a log, never thrown into the
   // caller (a world message loop on the network thread).
   const warn = console.warn, logs = []; console.warn = (...args) => logs.push(args);
-  try { assert.equal(peer.send('events', { type: 'huge', text: 'x'.repeat(40000) }), false); } finally { console.warn = warn; }
-  assert.equal(value.sent.length, 5); assert.match(logs[0][0], /oversized/);
+  // The events lane carries a battle's entity registry, over 32 KB on some
+  // maps; the state lane keeps its bound.
+  try {
+    assert.equal(peer.send('events', { type: 'entity-registry', text: 'x'.repeat(40000) }), true);
+    assert.equal(peer.send('events', { type: 'huge', text: 'x'.repeat(262144) }), false);
+    assert.equal(peer.send('state', { type: 'huge', text: 'x'.repeat(40000) }), false);
+  } finally { console.warn = warn; }
+  assert.equal(value.sent.length, 6); assert.equal(logs.length, 2); assert.match(logs[0][0], /oversized/);
   peer.close('kicked', 'Kicked by the server operator.');
   assert.deepEqual(value.closes, [[CLOSE_CODE.KICKED, 'Kicked by the server operator.']]);
   assert.equal(peer.send('events', { type: 'late' }), false);

@@ -14,6 +14,11 @@ const closeCode = (codes, reason) => codes[REASON_CODES[reason] ?? (/invalid|flo
 // minimum, every other snapshot is skipped until it drains (the next one is
 // still encoded against the client's acknowledged baseline).
 const CONGESTED_MS = 120, CLEAR_MS = 50;
+// The largest JSON message a lane carries. The state lane keeps snapshots
+// small; the events lane also carries one-off descriptions of a battle (the
+// entity registry a client needs before its welcome, over 32 KB on some
+// maps) up to what the page accepts (src/runtime/network-session.js).
+const STATE_MESSAGE_BYTES = 32768, EVENTS_MESSAGE_BYTES = 262144;
 
 export class UdpPeer extends EventEmitter {
   constructor(session, { contract, content, closeCodes }) {
@@ -74,7 +79,7 @@ export class UdpPeer extends EventEmitter {
   sendEncoded(label, data, type = "") {
     if (this.closed) return false;
     const bytes = Buffer.byteLength(data);
-    if (bytes > 32768) {
+    if (bytes > (label === "events" ? EVENTS_MESSAGE_BYTES : STATE_MESSAGE_BYTES)) {
       countNet("oversizedMessages");
       console.warn("Dropped oversized message:", JSON.stringify({ lane: label, type: String(type ?? "").slice(0, 40), bytes }));
       return false;
