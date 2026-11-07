@@ -1,6 +1,7 @@
 import { loadHostRuntime } from './host-runtime.js';
 import { loadNetworkContract } from './network-contract.js';
 import { liveActorRoster } from './actor-roster.js';
+import { hostDiagnostics } from './host-diagnostics.js';
 import { Session } from 'node:inspector';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -150,11 +151,26 @@ try {
     const actor=world.players.get(client);if(actor&&!actor.disconnectedAt)world.removePlayer(client);
   };
   let tickReportedAt=-Infinity;
+  let linearHighWater=0,closing=false;
   parentPort.postMessage({ type: 'ready', hostBuild: hostRuntime.manifest?.engineBuild ?? null, generation: game.playerUnit.generation, content, networkContract });
   // A notice from the server itself, to everyone in the battle (but `except`): a player joining or leaving, the operator's announcement.
   const notice=(text,except=null)=>{for(const [client,state] of clients)if(state.started&&client!==except)toClients({type:'chat',client,text,sender:'Server',playerId:0,team:false,admin:true});};
   const handle = async m => {
     try {
+      if(m.type==='hostDiagnostics'){
+        const sample=hostDiagnostics(game,{clients,joining,entityHost,linearHighWater});linearHighWater=sample.wasm.highWater??0;
+        parentPort.postMessage({type:'hostDiagnostics',id:m.id,sample});return;
+      }
+      if(m.type==='close'){
+        if(closing)return;closing=true;clearInterval(timer);timer=null;
+        for(const pending of joining.values())pending.cancelled=true;
+        await Promise.all([...joining.values()].map(p=>p.done));
+        for(const id of [...clients.keys()])leave(id);
+        entityHost?.dispose();entityHost=null;clientPort?.close();clientPort=null;
+        parentPort.postMessage({type:'closed',id:m.id,clients:clients.size,joining:joining.size});
+        parentPort.close();return;
+      }
+      if(closing)return;
       if(m.type==='attachNetwork'){clientPort?.close?.();clientPort=m.port;clientPort.on('message',handle);return;}
       if(m.type==='resetMetrics'){if(profiler){await profileCall('Profiler.stop');await profileCall('Profiler.start');}threadCpuStart=process.threadCpuUsage();for(const key of Object.keys(measurements))Array.isArray(measurements[key])?measurements[key].length=0:measurements[key]=0;parentPort.postMessage({type:'metricsReset',tick:game.worldClock.tick});}
       else if (m.type === 'metrics') { if(profiler){const {profile}=await profileCall('Profiler.stop');await writeFile(workerData.profile,JSON.stringify(profile));profiler.disconnect();profiler=null;} parentPort.postMessage({type:'metrics',threadCpu:process.threadCpuUsage(threadCpuStart),...measurements,tick:game.worldClock.tick,humans:typeof world.connectedCount==='function'?world.connectedCount():world.players.size,units:game.units.all().length,liveUnits:game.units.all().filter(u=>u.alive&&!u.removed&&u.character).length,actorRoster:liveActorRoster(game),armies:world.roster?.counts()}); }

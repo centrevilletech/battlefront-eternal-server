@@ -45,6 +45,12 @@ export const WORLD_SLICE_MS=4;
 // A publication's per-session work is only sent after every message that
 // arrived before it, so a snapshot never overtakes an earlier welcome.
 const routers=new WeakMap();
+// Cold diagnostics report real queue occupancy instead of estimating it from
+// transport bytes. They retain no router or world after the caller returns.
+export function worldQueueDiagnostics(world){
+  const r=routers.get(world);return r?{inbox:r.inbox.length-r.head,snapshots:r.snapshots.size,acks:r.acks.size,edges:r.edges.size,inputs:r.inputs.length,sessions:r.sessions.size}
+    :{inbox:0,snapshots:0,acks:0,edges:0,inputs:0,sessions:0};
+}
 function routerFor(world){
   let router=routers.get(world);
   if(!router){

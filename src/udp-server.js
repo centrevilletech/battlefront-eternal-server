@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { networkInterfaces } from "node:os";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { validateNetworkContract, wireCompatibility } from "./network-contract.js";
-import { GameSession } from "./game-session.js";
+import { GameSession, worldQueueDiagnostics } from "./game-session.js";
 import { UdpPeer } from "./udp-peer.js";
 import { enableNetMetrics, netMetrics, resetNetMetrics } from "./net-metrics.js";
 
@@ -90,7 +90,7 @@ export async function startUdpServer({ engine, keys, port = 18451, host = null, 
     stats: () => endpoint.stats(),
     // This thread's timing (event loop, snapshot hop) and each session's
     // transport counters, for the probe and the operator.
-    metrics: async () => netMetrics(),
+    metrics: async () => ({...netMetrics(),queues:worldQueueDiagnostics(battle?.world)}),
     resetMetrics: async () => resetNetMetrics(),
     diagnostics: async () => [...sessions.values()].map(session => session.transportDiagnostics()),
     async close() { battle = null; endpoint.close(); peers.clear(); sessions.clear(); },

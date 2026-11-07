@@ -34,7 +34,7 @@ export function createSnapshotHost({game,stateBytesPerSecond}){
   log('host',null,{stateBytesPerSecond});
   const clients=new Set();
   const host={ descriptor:()=>({}), addClient(id){clients.add(id);log('addClient',id);}, removeClient(id){clients.delete(id);log('removeClient',id);},
-    setReady(){}, setStarted(){}, advanceEdges:()=>[], consumedEdges:()=>[], input(){},
+    setReady(){}, setStarted(){}, advanceEdges:()=>[], consumedEdges:()=>[], input(){},dispose(){clients.clear();log('disposed');},
     publish(){ log('publish',null,{tick:game.worldClock.tick}); return {shared:[],ownPackets:[],inputAcks:[],edgeResults:[],reliableEvents:[],diagnostics:[],faults:[]}; } };
   if(fake.staleClients)host.staleClients=seconds=>[...clients].filter(id=>fake.staleClients.includes(id)&&seconds===30);
   return host;
@@ -135,4 +135,20 @@ test('with an engine that captures snapshots on even ticks only, a batch also pu
   const ticks = events('publish').map(m => m.tick), evens = ticks.filter(tick => tick % 2 === 0);
   assert.ok(ticks.length < ticks.at(-1) * 0.8, `fewer publications than ticks (${ticks.length} for ${ticks.at(-1)})`);
   for (let i = 1; i < evens.length; i++) assert.ok(evens[i] - evens[i - 1] <= 4, `no snapshot gap past a batch: ${evens.join(',')}`);
+});
+
+test('graceful close cancels an admitted join and releases publication before exiting',async t=>{
+  const {worker,messages,events}=await startWorld(t,{addMs:50});
+  worker.postMessage({type:'join',client:'pending'});
+  await waitFor(()=>events('addPlayer','pending').length);
+  worker.postMessage({type:'hostDiagnostics',id:91});
+  await waitFor(()=>messages.some(m=>m.type==='hostDiagnostics'));
+  const sample=messages.find(m=>m.type==='hostDiagnostics').sample;
+  assert.equal(sample.queues.joining,1);assert.equal(sample.native.available,false);
+  const exit=new Promise(resolve=>worker.once('exit',resolve));
+  worker.postMessage({type:'close',id:92});
+  await waitFor(()=>messages.some(m=>m.type==='closed'));
+  const closed=messages.find(m=>m.type==='closed');assert.equal(closed.clients,0);assert.equal(closed.joining,0);
+  assert.equal(events('addClient','pending').length,0);assert.equal(events('disposed').length,1);
+  assert.equal(await exit,0);
 });
