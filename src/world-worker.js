@@ -1,3 +1,4 @@
+import { loadHostRuntime } from './host-runtime.js';
 import { loadNetworkContract } from './network-contract.js';
 import { liveActorRoster } from './actor-roster.js';
 import { Session } from 'node:inspector';
@@ -11,12 +12,13 @@ globalThis.fetch = await dataReader(workerData.data);
 try {
   const root = resolve(workerData.engine);
   const networkContract = await loadNetworkContract(root);
+  const hostRuntime = await loadHostRuntime(root);
   const { createGame } = await import(pathToFileURL(resolve(root, 'src/game.js')));
   const { createMultiplayerWorld } = await import(pathToFileURL(resolve(root, 'src/runtime/multiplayer-world.js')));
   const { worldState } = await import(pathToFileURL(resolve(root, 'src/runtime/world-state.js')));
   const { contentHash } = await import(pathToFileURL(resolve(root, 'src/runtime/content-hash.js')));
   const content = await contentHash(workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1');
-  const game = await createGame({ headless: true, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
+  const game = await createGame({ headless: true, simulationFactory: hostRuntime.simulationFactory, query: workerData.query ?? '?map=nab2&side=rep&ai=classic&seed=1' });
   const world = createMultiplayerWorld(game, { maxPlayers: workerData.maxPlayers ?? 64, armySize: workerData.armySize ?? 32 });
   const { OWN_PLAYER_SCHEMA } = await import(pathToFileURL(resolve(root, 'src/runtime/network-entity-player.js')));
   if (OWN_PLAYER_SCHEMA !== networkContract.ownCorrectionSchema) throw Error('Engine own-player schema mismatch');
@@ -148,7 +150,7 @@ try {
     const actor=world.players.get(client);if(actor&&!actor.disconnectedAt)world.removePlayer(client);
   };
   let tickReportedAt=-Infinity;
-  parentPort.postMessage({ type: 'ready', generation: game.playerUnit.generation, content, networkContract });
+  parentPort.postMessage({ type: 'ready', hostBuild: hostRuntime.manifest?.engineBuild ?? null, generation: game.playerUnit.generation, content, networkContract });
   // A notice from the server itself, to everyone in the battle (but `except`): a player joining or leaving, the operator's announcement.
   const notice=(text,except=null)=>{for(const [client,state] of clients)if(state.started&&client!==except)toClients({type:'chat',client,text,sender:'Server',playerId:0,team:false,admin:true});};
   const handle = async m => {
@@ -210,7 +212,7 @@ try {
         if (!clients.has(m.client)) throw Error('not joined');
         const player = world.player(m.client);
         let result = { epoch: 1, tick: game.worldClock.tick };
-        if (m.method === 'init') result = { ...result, type: 'ready', generation: player.generation, playerId: player.unitId, shared: false };
+        if (m.method === 'init') result = { ...result, type: 'ready', hostBuild: hostRuntime.manifest?.engineBuild ?? null, generation: player.generation, playerId: player.unitId, shared: false };
         else if (m.method === 'start') { const state=clients.get(m.client);state.started=true;entityHost?.setStarted(m.client,true);result.type='started'; }
         else if (m.method === 'suspend') { clients.get(m.client).started = false; entityHost?.setStarted(m.client,false); world.clearInput?.(m.client); result.type = 'suspended'; }
         else if (m.method === 'resync') { entityHost?.resync(m.client); }
