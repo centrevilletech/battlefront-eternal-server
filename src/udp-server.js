@@ -90,7 +90,7 @@ export async function startUdpServer({ engine, keys, port = 18451, host = null, 
     stats: () => endpoint.stats(),
     // This thread's timing (event loop, snapshot hop) and each session's
     // transport counters, for the probe and the operator.
-    metrics: async () => ({...netMetrics(),queues:worldQueueDiagnostics(battle?.world)}),
+    metrics: async () => ({...netMetrics(),js:process.memoryUsage(),queues:worldQueueDiagnostics(battle?.world)}),
     resetMetrics: async () => resetNetMetrics(),
     diagnostics: async () => [...sessions.values()].map(session => session.transportDiagnostics()),
     async close() { battle = null; endpoint.close(); peers.clear(); sessions.clear(); },
