@@ -33,10 +33,12 @@ export async function loadHostRuntime(engine) {
   for (const required of ['engine/src/game.js', 'engine/src/sim-wasm.js', 'engine/src/sim/host-runtime.js', 'engine/src/sim/host-schema.js', 'server/src/world-worker.js', 'server/src/host-runtime.js']) {
     if (!Object.hasOwn(manifest.artifacts, required)) throw Error('Missing host artifact: ' + required);
   }
-  await Promise.all(Object.entries(manifest.artifacts).map(async ([path, hash]) => {
+  // A bundle has many small dependency files. Read sequentially so ordinary
+  // file-descriptor limits do not turn valid startup into an EMFILE failure.
+  for (const [path, hash] of Object.entries(manifest.artifacts)) {
     if (!/^(engine|server|update)\/[a-zA-Z0-9_.\/-]+$/.test(path) || path.split('/').includes('..') || !/^[a-f0-9]{64}$/.test(hash)) throw Error('Invalid host artifact');
     if (sha256(await readFile(join(root, path))) !== hash) throw Error('Host artifact hash mismatch: ' + path);
-  }));
+  }
   // Verify this running adapter too, rather than accepting a manifest for an
   // adjacent server tree while executing a different checkout's worker.
   for (const file of ['host-runtime.js', 'world-worker.js']) {
