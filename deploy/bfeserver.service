@@ -1,12 +1,15 @@
+# bfeserver as install-server.sh (in the server archive) sets it up.
 [Unit]
 Description=Battlefront Eternal dedicated server
+Wants=network-online.target
 After=network-online.target
 [Service]
 User=bfeserver
 Group=bfeserver
 Environment=BFE_STATE_DIR=/var/lib/bfeserver
-ExecStart=/opt/bfeserver/node/bin/node /opt/bfeserver/src/main.js --serve
-Restart=on-failure
+ExecStart=/opt/bfeserver/rust/current/bfeserver --serve
+Restart=always
+RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
