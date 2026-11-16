@@ -11,9 +11,8 @@ services:
     cpus: 2
     volumes:
       - state:/data
-      # Mount an operator-owned engine checkout and imported game data before play.
-      # - /path/to/engine:/engine:ro
-      # - /path/to/imported-data:/game-data:ro
+      # Game data prepared from your own copy of the game (config.json "data", or BFE_DATA_DIR):
+      # - /path/to/prepared-data:/game-data:ro
     tmpfs: [/tmp]
     logging:
       driver: json-file
